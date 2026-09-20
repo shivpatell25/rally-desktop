@@ -29,9 +29,16 @@ final class RallyStore: ObservableObject {
     @Published var channels: [IptvChannel] = []
     @Published var connectionStatus: String?
     @Published var tab: RallyTab = .home
-
     let settings = SettingsStore()
     private let espn = EspnClient()
+    @Published var selectedEvent: SportEvent?
+    @Published var selectedChannel: IptvChannel?
+    @Published var showingMultiView = false
+    let multiView = MultiViewState()
+
+    var stremioClient: StremioClient { stremio }
+    var stalkerClient: StalkerClient { providers().0 }
+    var xtreamClient: XtreamClient { providers().1 }
     private let stremio = StremioClient()
     private let updates = UpdateChecker()
     private var stalker: StalkerClient?
@@ -118,6 +125,24 @@ struct ContentView: View {
         }
         .background(RallyTheme.background)
         .task { await store.refresh(); await store.checkUpdates() }
+        .sheet(item: $store.selectedEvent) { event in
+            PlayerView(event: event, channel: nil)
+                .environmentObject(store)
+                .environmentObject(store.settings)
+                .frame(minWidth: 900, minHeight: 600)
+        }
+        .sheet(item: $store.selectedChannel) { channel in
+            PlayerView(event: nil, channel: channel)
+                .environmentObject(store)
+                .environmentObject(store.settings)
+                .frame(minWidth: 900, minHeight: 600)
+        }
+        .sheet(isPresented: $store.showingMultiView) {
+            MultiViewView(state: store.multiView)
+                .environmentObject(store)
+                .environmentObject(store.settings)
+                .frame(minWidth: 900, minHeight: 600)
+        }
     }
 }
 
@@ -127,7 +152,7 @@ struct HomeView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220))], spacing: 16) {
                 ForEach(store.events.prefix(60)) { event in
-                    GameCard(event: event)
+                    GameCard(event: event).onTapGesture { store.selectedEvent = event }
                 }
             }
             .padding(20)
@@ -147,7 +172,7 @@ struct LeaguesView: View {
                 if !games.isEmpty {
                     Section("\(league) (\(games.count))") {
                         ForEach(games.prefix(30)) { event in
-                            GameRow(event: event)
+                            GameRow(event: event).onTapGesture { store.selectedEvent = event }
                         }
                     }
                 }
@@ -167,7 +192,7 @@ struct SearchView: View {
                 .padding([.horizontal, .top])
             List {
                 ForEach(filteredEvents) { event in
-                    GameRow(event: event)
+                    GameRow(event: event).onTapGesture { store.selectedEvent = event }
                 }
                 if !query.isEmpty {
                     Section("Channels") {
@@ -179,6 +204,8 @@ struct SearchView: View {
                                     Text(now).font(.caption).foregroundStyle(RallyTheme.textTertiary)
                                 }
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture { store.selectedChannel = channel }
                         }
                     }
                 }

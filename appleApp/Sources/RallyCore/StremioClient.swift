@@ -112,6 +112,40 @@ public final class StremioClient: Sendable {
         return streams.compactMap { toOption(stream: $0, addonName: addonName) }
     }
 
+    /// Event discovery: manifest → catalogs → metas matching the event →
+    /// streams. Mirrors `StremioRepositoryImpl.getStreamsForEvent` (4-way cap).
+    public func findStreams(for event: SportEvent, addonBase: String) async -> [StremioStreamOption] {
+        guard let manifest = try? await fetchManifest(from: addonBase.hasSuffix(".json") ? addonBase : addonBase + "/manifest.json"),
+              let catalogs = manifest.catalogs, !catalogs.isEmpty else { return [] }
+        let addonName = manifest.name
+        let metas = await withTaskGroup(of: [StremioMetaItem].self) { group in
+            for catalog in catalogs.prefix(6) {
+                group.addTask { (try? await self.fetchCatalog(addonBase, catalog: catalog)) ?? [] }
+            }
+            var out: [StremioMetaItem] = []
+            for await items in group { out.append(contentsOf: items) }
+            return out
+        }
+        let matches = metas.filter {
+            guard let name = $0.name, !name.isEmpty else { return false }
+            let probe = SportEvent(id: $0.id, name: name, homeTeam: event.homeTeam, awayTeam: event.awayTeam,
+                startTime: event.startTime, status: event.status, sport: event.sport, league: event.league)
+            return StreamSelector.textMatchesEvent(name, event: probe)
+        }
+        if matches.isEmpty { return [] }
+        return await withTaskGroup(of: [StremioStreamOption].self) { group in
+            for meta in matches.prefix(6) {
+                group.addTask {
+                    (try? await self.fetchStreams(addonBase: addonBase, type: meta.type ?? "sport",
+                        metaId: meta.id, addonName: addonName)) ?? []
+                }
+            }
+            var out: [StremioStreamOption] = []
+            for await opts in group { out.append(contentsOf: opts) }
+            return out
+        }
+    }
+
     private func toOption(stream: StremioStream, addonName: String?) -> StremioStreamOption? {
         guard let url = stream.url, !url.isEmpty else { return nil }
         let lower = url.lowercased()

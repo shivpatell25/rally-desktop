@@ -154,4 +154,35 @@ final class RallyDesktopTests: XCTestCase {
         store.recordStreamSuccess(target: "http://x/1", startupMs: 750)
         XCTAssertEqual(store.streamHealth(target: "http://x/1").successes, 1)
     }
+
+    func testResolverRanksExactBeforeQuality() {
+        let home = Team(id: "1", name: "Dallas Cowboys", abbreviation: "DAL")
+        let away = Team(id: "2", name: "Philadelphia Eagles", abbreviation: "PHI")
+        let event = SportEvent(id: "e1", name: "DAL @ PHI", homeTeam: home, awayTeam: away,
+            startTime: Date(), status: .notStarted, sport: "football", league: "NFL")
+        let opts = [
+            StremioStreamOption(title: "Random 4K", streamUrl: "http://x/4k", quality: "4K"),
+            StremioStreamOption(title: "Dallas Cowboys vs Philadelphia Eagles 720p", streamUrl: "http://x/720", quality: "720p"),
+            StremioStreamOption(title: "Watch here", streamUrl: "http://x/page.html", isDirectPlayable: false),
+        ]
+        let cands = StreamResolver.candidates(event: event, channels: [], stremioOptions: opts)
+        // HTML watch page filtered; exact 720p outranks non-exact 4K.
+        XCTAssertEqual(cands.map { $0.url }, ["http://x/720", "http://x/4k"])
+        XCTAssertTrue(cands[0].exactMatch)
+    }
+
+    func testResolverIptvGuideMatch() {
+        let home = Team(id: "1", name: "Arsenal", abbreviation: "ARS")
+        let away = Team(id: "2", name: "Chelsea", abbreviation: "CHE")
+        let event = SportEvent(id: "e2", name: "ARS vs CHE", homeTeam: home, awayTeam: away,
+            startTime: Date(), status: .live, sport: "soccer", league: "EPL")
+        let guide = ChannelGuide(now: EpgProgram(title: "Arsenal vs Chelsea"))
+        let channels = [
+            IptvChannel(id: "1", number: "1", name: "Sky Sports 1080p", guide: guide),
+            IptvChannel(id: "2", number: "2", name: "Cooking 24/7"),
+        ]
+        let cands = StreamResolver.candidates(event: event, channels: channels, stremioOptions: [])
+        XCTAssertEqual(cands.count, 1)
+        XCTAssertEqual(cands[0].channel?.id, "1")
+    }
 }
