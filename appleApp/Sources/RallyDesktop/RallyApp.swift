@@ -9,32 +9,69 @@ struct RallyApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(store.settings)
                 .preferredColorScheme(.dark)
         }
         .windowStyle(.titleBar)
     }
 }
 
+enum RallyTab: Int, Hashable {
+    case home, leagues, search, settings
+}
+
 @MainActor
 final class RallyStore: ObservableObject {
     @Published var events: [SportEvent] = []
     @Published var isLoading = false
-    @Published var addonManifest: StremioManifest?
+    @Published var addonManifests: [String: StremioManifest] = [:]
     @Published var update: RallyRelease?
-    @AppStorage("addonUrl") var addonUrl = "https://sports.highfly.to/manifest.json"
+    @Published var channels: [IptvChannel] = []
+    @Published var connectionStatus: String?
+    @Published var tab: RallyTab = .home
 
+    let settings = SettingsStore()
     private let espn = EspnClient()
     private let stremio = StremioClient()
     private let updates = UpdateChecker()
+    private var stalker: StalkerClient?
+    private var xtream: XtreamClient?
+
+    private func providers() -> (StalkerClient, XtreamClient) {
+        if let s = stalker, let x = xtream { return (s, x) }
+        let s = StalkerClient(settings: settings)
+        let x = XtreamClient(settings: settings)
+        stalker = s; xtream = x
+        return (s, x)
+    }
 
     func refresh() async {
         isLoading = true
         defer { isLoading = false }
         async let board = espn.fetchAllLeagues()
-        async let manifest: StremioManifest? = { try? await stremio.fetchManifest(from: addonUrl) }()
-        let (events, man) = await (board, manifest)
-        self.events = events
-        self.addonManifest = man
+        let addons = settings.stremioAddonUrls
+        let manifests = await withTaskGroup(of: (String, StremioManifest?).self) { group in
+            for url in addons {
+                group.addTask { (url, try? await self.stremio.fetchManifest(from: url)) }
+            }
+            var out: [String: StremioManifest] = [:]
+            for await (url, man) in group { if let man { out[url] = man } }
+            return out
+        }
+        self.events = await board
+        self.addonManifests = manifests
+    }
+
+    func refreshChannels() async {
+        let (s, x) = providers()
+        channels = settings.iptvProvider == .stalker ? await s.getChannels() : await x.getChannels()
+    }
+
+    func testConnection() async {
+        connectionStatus = "Testing…"
+        let (s, x) = providers()
+        let ok = settings.iptvProvider == .stalker ? await s.authenticate(force: true) : await x.authenticate()
+        connectionStatus = ok ? "Connected" : "Failed — check URL and credentials"
     }
 
     func checkUpdates() async {
@@ -47,17 +84,21 @@ struct ContentView: View {
     @EnvironmentObject var store: RallyStore
     var body: some View {
         NavigationSplitView {
-            List {
+            List(selection: $store.tab) {
                 Section("Browse") {
-                    Label("Home", systemImage: "house").tag(0)
-                    Label("Leagues", systemImage: "trophy").tag(1)
-                    Label("Search", systemImage: "magnifyingglass").tag(2)
-                    Label("Settings", systemImage: "gear").tag(3)
+                    Label("Home", systemImage: "house").tag(RallyTab.home)
+                    Label("Leagues", systemImage: "trophy").tag(RallyTab.leagues)
+                    Label("Search", systemImage: "magnifyingglass").tag(RallyTab.search)
+                    Label("Settings", systemImage: "gear").tag(RallyTab.settings)
                 }
-                if let man = store.addonManifest {
-                    Section("Addon") {
-                        Text(man.name ?? "Stremio").font(.headline)
-                        Text("v\(man.version ?? "?")").font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                if !store.addonManifests.isEmpty {
+                    Section("Addons") {
+                        ForEach(store.addonManifests.sorted(by: { $0.key < $1.key }), id: \.key) { _, man in
+                            VStack(alignment: .leading) {
+                                Text(man.name ?? "Stremio").font(.headline)
+                                Text("v\(man.version ?? "?")").font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                            }
+                        }
                     }
                 }
                 if let rel = store.update {
@@ -68,7 +109,12 @@ struct ContentView: View {
             }
             .navigationTitle("Rally")
         } detail: {
-            HomeView()
+            switch store.tab {
+            case .home: HomeView()
+            case .leagues: LeaguesView()
+            case .search: SearchView()
+            case .settings: SettingsView()
+            }
         }
         .background(RallyTheme.background)
         .task { await store.refresh(); await store.checkUpdates() }
@@ -88,6 +134,85 @@ struct HomeView: View {
         }
         .background(RallyTheme.background)
         .overlay { if store.isLoading && store.events.isEmpty { ProgressView("Loading games…") } }
+    }
+}
+
+struct LeaguesView: View {
+    @EnvironmentObject var store: RallyStore
+    @EnvironmentObject var settings: SettingsStore
+    var body: some View {
+        List {
+            ForEach(settings.sportsOrder, id: \.self) { league in
+                let games = store.events.filter { $0.league == league }
+                if !games.isEmpty {
+                    Section("\(league) (\(games.count))") {
+                        ForEach(games.prefix(30)) { event in
+                            GameRow(event: event)
+                        }
+                    }
+                }
+            }
+        }
+        .background(RallyTheme.background)
+    }
+}
+
+struct SearchView: View {
+    @EnvironmentObject var store: RallyStore
+    @State private var query = ""
+    var body: some View {
+        VStack {
+            TextField("Search teams, games, channels", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .padding([.horizontal, .top])
+            List {
+                ForEach(filteredEvents) { event in
+                    GameRow(event: event)
+                }
+                if !query.isEmpty {
+                    Section("Channels") {
+                        ForEach(filteredChannels) { channel in
+                            HStack {
+                                Text(channel.name)
+                                Spacer()
+                                if let now = channel.guide?.now?.title {
+                                    Text(now).font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .background(RallyTheme.background)
+    }
+    private var filteredEvents: [SportEvent] {
+        guard !query.isEmpty else { return Array(store.events.prefix(20)) }
+        let q = query.lowercased()
+        return store.events.filter {
+            $0.name.lowercased().contains(q)
+            || ($0.homeTeam?.name.lowercased().contains(q) == true)
+            || ($0.awayTeam?.name.lowercased().contains(q) == true)
+        }
+    }
+    private var filteredChannels: [IptvChannel] {
+        let q = query.lowercased()
+        return store.channels.filter { $0.name.lowercased().contains(q) }.prefix(30).map { $0 }
+    }
+}
+
+struct GameRow: View {
+    let event: SportEvent
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(event.name).font(.headline).foregroundStyle(RallyTheme.textPrimary)
+                Text("\(event.league) · \(event.startTime.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption).foregroundStyle(RallyTheme.textTertiary)
+            }
+            Spacer()
+            StatusBadge(status: event.status)
+        }
     }
 }
 
