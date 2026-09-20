@@ -1,0 +1,13 @@
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.csproj.AssemblyReference.cache
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.GeneratedMSBuildEditorConfig.editorconfig
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.AssemblyInfoInputs.cache
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.AssemblyInfo.cs
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.csproj.CoreCompileInputs.cache
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.sourcelink.json
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/bin/Debug/net8.0/Rally.Core.deps.json
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/bin/Debug/net8.0/Rally.Core.dll
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/bin/Debug/net8.0/Rally.Core.pdb
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.dll
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/refint/Rally.Core.dll
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/Rally.Core.pdb
+/Users/shiv/Desktop/rally-desktop/windowsApp/src/Rally.Core/obj/Debug/net8.0/ref/Rally.Core.dll

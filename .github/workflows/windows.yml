@@ -1,0 +1,25 @@
+name: windows
+
+on:
+  push:
+    paths:
+      - 'windowsApp/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windowsApp/**'
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windowsApp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build Rally.sln -c Release
+      - run: dotnet test tests/Rally.Tests -c Release --no-build

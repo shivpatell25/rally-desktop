@@ -1,0 +1,16 @@
+<Window
+    x:Class="Rally.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    Title="Rally">
+    <controls:NavigationView x:Name="Nav" IsBackButtonVisible="Collapsed"
+        SelectionChanged="Nav_SelectionChanged" Background="{StaticResource RallyBackground}">
+        <controls:NavigationView.MenuItems>
+            <controls:NavigationViewItem Content="Home" Tag="home" Icon="Home" />
+            <controls:NavigationViewItem Content="Multi-View" Tag="multi" Icon="ViewAll" />
+            <controls:NavigationViewItem Content="Settings" Tag="settings" Icon="Setting" />
+        </controls:NavigationView.MenuItems>
+        <Frame x:Name="ContentFrame" />
+    </controls:NavigationView>
+</Window>

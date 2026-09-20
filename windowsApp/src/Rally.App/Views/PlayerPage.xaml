@@ -1,0 +1,35 @@
+<Page
+    x:Class="Rally.App.Views.PlayerPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vlc="using:LibVLCSharp.Platforms.Windows"
+    Background="{StaticResource RallyBackground}">
+    <Grid ColumnSpacing="12" Padding="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <vlc:VideoView x:Name="Video" />
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                <Button Content="Pause" Click="Pause_Click" />
+                <Button Content="Retry" Click="Retry_Click" />
+                <TextBlock x:Name="NowPlaying" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+        <StackPanel Grid.Column="1" Spacing="8">
+            <TextBlock Text="Sources" FontSize="18" FontWeight="SemiBold" />
+            <ListView x:Name="Sources" SelectionMode="Single" SelectionChanged="Sources_SelectionChanged">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap" />
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </StackPanel>
+    </Grid>
+</Page>

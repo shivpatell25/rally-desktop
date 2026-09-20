@@ -1,0 +1,29 @@
+<Page
+    x:Class="Rally.App.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource RallyBackground}">
+    <ScrollViewer Padding="20">
+        <StackPanel Spacing="12" MaxWidth="640">
+            <TextBlock Text="Sources" FontSize="20" FontWeight="SemiBold" />
+            <ComboBox x:Name="Provider" Header="IPTV provider">
+                <ComboBoxItem Content="Stalker / Ministra" Tag="Stalker" />
+                <ComboBoxItem Content="Xtream Codes" Tag="Xtream" />
+            </ComboBox>
+            <TextBox x:Name="PortalUrl" Header="Portal URL" />
+            <TextBox x:Name="MacAddress" Header="MAC address" IsReadOnly="True" />
+            <TextBox x:Name="XtreamServer" Header="Xtream server URL" />
+            <TextBox x:Name="XtreamUser" Header="Xtream username" />
+            <PasswordBox x:Name="XtreamPass" Header="Xtream password" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Test connection" Click="Test_Click" />
+                <Button Content="Save" Click="Save_Click" />
+                <TextBlock x:Name="Status" VerticalAlignment="Center" Opacity="0.7" />
+            </StackPanel>
+            <TextBlock Text="Stremio addons (one per line)" FontWeight="SemiBold" />
+            <TextBox x:Name="Addons" AcceptsReturn="True" MinHeight="80" />
+            <TextBlock Text="HTTP portals work for legacy providers but can be intercepted — prefer HTTPS."
+                Opacity="0.6" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

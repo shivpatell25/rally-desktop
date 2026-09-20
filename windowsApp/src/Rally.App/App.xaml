@@ -1,0 +1,18 @@
+<Application
+    x:Class="Rally.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+            <SolidColorBrush x:Key="RallyBackground" Color="#05080F" />
+            <SolidColorBrush x:Key="RallySurface" Color="#111B2A" />
+            <!-- AppleTvTheme tokens: RallyCyan #6FCFF6, RallyLime #EAFB78, LiveRed #FF453A -->
+            <SolidColorBrush x:Key="RallyAccent" Color="#6FCFF6" />
+            <SolidColorBrush x:Key="RallyLime" Color="#EAFB78" />
+            <SolidColorBrush x:Key="RallyLive" Color="#FF453A" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
