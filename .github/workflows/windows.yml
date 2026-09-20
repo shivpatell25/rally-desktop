@@ -21,8 +21,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - run: dotnet build src/Rally.Core -c Release
-      - run: dotnet test tests/Rally.Tests -c Release --no-build
+      - run: dotnet test tests/Rally.Tests -c Release
       # WinUI needs VS AppxPackage tasks: build the app with MSBuild, not dotnet.
       - uses: microsoft/setup-msbuild@v2
       - run: msbuild src/Rally.App/Rally.App.csproj /p:Configuration=Release /p:Platform=x64 /restore
