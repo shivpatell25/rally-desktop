@@ -25,3 +25,4 @@ scratch/
 *.DS_Store
 
 appleApp/.build/
+appleApp/dist/
