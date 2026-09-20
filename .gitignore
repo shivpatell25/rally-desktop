@@ -26,3 +26,7 @@ scratch/
 
 appleApp/.build/
 appleApp/dist/
+
+# .NET
+bin/
+obj/
