@@ -29,7 +29,7 @@ public sealed partial class PlayerPage : Page
     {
         _event = ev;
         if (_event is null) return;
-        Core.Initialize();
+        LibVLCSharp.Shared.Core.Initialize();
         _libvlc?.Dispose();
         _player?.Dispose();
         _libvlc = new LibVLC("--no-video-title-show");
