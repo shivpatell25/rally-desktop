@@ -19,6 +19,7 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.2428" />
     <PackageReference Include="LibVLCSharp" Version="3.*" />
+    <PackageReference Include="LibVLCSharp.WinUI" Version="3.*" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.*" />
   </ItemGroup>
 
