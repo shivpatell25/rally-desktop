@@ -1,0 +1,54 @@
+{
+  "": {
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/primary.swiftdeps"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/EspnClient.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/EspnClient.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/EspnClient.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/EspnClient~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/EspnClient.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/EspnClient.dia"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/Models.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/Models.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/Models.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/Models~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/Models.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/Models.dia"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/PlaybackController.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/PlaybackController.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/PlaybackController.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/PlaybackController~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/PlaybackController.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/PlaybackController.dia"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/RallyTheme.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/RallyTheme.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/RallyTheme.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/RallyTheme~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/RallyTheme.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/RallyTheme.dia"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/StreamSelector.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StreamSelector.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StreamSelector.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StreamSelector~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StreamSelector.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StreamSelector.dia"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/StremioClient.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StremioClient.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StremioClient.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StremioClient~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StremioClient.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/StremioClient.dia"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Sources/RallyCore/UpdateChecker.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/UpdateChecker.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/UpdateChecker.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/UpdateChecker~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/UpdateChecker.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyCore.build/UpdateChecker.dia"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyDesktopTests.build/primary.swiftdeps"
+  },
+  "/Users/shiv/Desktop/rally-desktop/appleApp/Tests/RallyDesktopTests/RallyDesktopTests.swift": {
+    "dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyDesktopTests.build/RallyDesktopTests.d",
+    "object": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyDesktopTests.build/RallyDesktopTests.swift.o",
+    "swiftmodule": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyDesktopTests.build/RallyDesktopTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyDesktopTests.build/RallyDesktopTests.swiftdeps",
+    "diagnostics": "/Users/shiv/Desktop/rally-desktop/appleApp/.build/arm64-apple-macosx/debug/RallyDesktopTests.build/RallyDesktopTests.dia"
+  }
+}
