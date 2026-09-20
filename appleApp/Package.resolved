@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle.git",
+      "state" : {
+        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+        "version" : "2.10.0"
+      }
+    },
+    {
+      "identity" : "vlckit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/videolan/vlckit.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "440dc1df19d181b500ae414762671701d192bcf8"
+      }
+    }
+  ],
+  "version" : 2
+}

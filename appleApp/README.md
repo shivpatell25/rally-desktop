@@ -20,21 +20,22 @@ Bundle ID: `com.shiv.rally.macos`. Windows (WinUI3) follows after macOS validate
 
 Rules kept: 4-tile Multi-View @720p30, evidence-based quality labels (never guess 4K/HDR), default addon `https://sports.highfly.to/manifest.json`.
 
-## Build now (Command Line Tools only)
+## Build (Xcode 27.0)
 
 ```
 cd appleApp
-swift build          # PASS
-swift run SelfTest   # PASS (10 asserts)
-swift test           # needs full Xcode — XCTest not in CLT
+swift build   # PASS, VLCKit + Sparkle2 resolved
+swift test    # 6/6 PASS — quality, matcher, versions, VLC cap + headers
 ```
+
+Playback: `VlcEngine` (4-tile cap, UA/Referer forwarding) primary, AVPlayer fallback for plain HLS.
+Updates: `SparkleUpdater` (feed `appleApp/appcast.xml`) primary, GitHub-Releases `UpdateChecker` fallback.
 
 ## Still needed from you
 
-1. Full Xcode from the App Store (`xcodebuild` fails on CLT-only). Unlocks: `swift test`, SwiftUI previews, `VLCKit` + `Sparkle2` SPM deps, signing (`com.shiv.rally.macos`), notarization, DMG.
-2. Apple Developer Team ID when ready to sign.
-3. `brew reinstall` of CLT (`sudo rm -rf /Library/Developer/CommandLineTools; sudo xcode-select --install`) — current CLT is arch-mismatched, so `brew install` builds from source and fails; VLC cask + Temurin JDK17 binary worked around it.
+1. Team ID when ready to sign `com.shiv.rally.macos`; `.app` packaging sets `SUFeedURL` to the appcast URL.
+2. `sparkle:edSignature` keypair (`./bin/generate_keys`) before first DMG release.
 
 ## Next
 
-VLCKit playback target → Sparkle2 in-app updates → DMG + notarization → Windows WinUI3 port.
+DMG + notarization → Windows WinUI3 port.

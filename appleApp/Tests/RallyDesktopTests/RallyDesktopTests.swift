@@ -42,4 +42,28 @@ final class RallyDesktopTests: XCTestCase {
         XCTAssertEqual(c.compareVersions("1.0.0", "1.0.0"), 0)
         XCTAssertLessThan(c.compareVersions("1.0.0", "1.0.1"), 0)
     }
+
+    func testVlcTileCap() {
+        let engine = VlcEngine()
+        XCTAssertTrue(engine.reserve(slotId: "a"))
+        XCTAssertTrue(engine.reserve(slotId: "b"))
+        XCTAssertTrue(engine.reserve(slotId: "c"))
+        XCTAssertTrue(engine.reserve(slotId: "d"))
+        XCTAssertFalse(engine.reserve(slotId: "e"))
+        XCTAssertEqual(engine.tileCount, 4)
+        engine.release(slotId: "a")
+        XCTAssertTrue(engine.reserve(slotId: "e"))
+    }
+
+    func testVlcHeaderAllowlist() {
+        let engine = VlcEngine()
+        let opts = engine.vlcOptions(from: [
+            "User-Agent": "Rally/macOS",
+            "Referer": "https://example.com/",
+            "Cookie": "secret=1",
+            "Authorization": "Bearer x",
+        ])
+        XCTAssertEqual(opts, ["http-user-agent": "Rally/macOS", "http-referrer": "https://example.com/"])
+        XCTAssertNil(engine.vlcOptions(from: nil)["http-user-agent"])
+    }
 }
