@@ -40,10 +40,15 @@ public enum StreamResolver {
             out.append(PlayCandidate(title: ch.name, url: ch.streamUrl ?? ch.id, headers: nil, kind: .iptv,
                 exactMatch: exact, rank: StreamSelector.qualityRank(quality), channel: ch))
         }
-        return out.sorted {
+        let ranked = out.sorted {
             if $0.exactMatch != $1.exactMatch { return $0.exactMatch }
             return $0.rank > $1.rank
         }
+        // Addons often return the same URL across matched metas — collapse
+        // duplicates (keep best rank) and cap the picker list.
+        var seen = Set<String>()
+        return ranked.filter { seen.insert($0.url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()).inserted }
+            .prefix(40).map { $0 }
     }
 
     public static func channelCandidates(_ channels: [IptvChannel]) -> [PlayCandidate] {

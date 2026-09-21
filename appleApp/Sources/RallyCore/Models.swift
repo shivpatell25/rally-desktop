@@ -50,6 +50,45 @@ public struct HighlightClip: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+public struct PlayerStatTable: Codable, Sendable, Equatable {
+    public var teamId: String?
+    public var teamName: String
+    public var teamAbbreviation: String
+    public var teamLogoUrl: String?
+    public var category: String?
+    public var labels: [String]
+    public var rows: [PlayerStatRow]
+    public init(teamId: String? = nil, teamName: String, teamAbbreviation: String, teamLogoUrl: String? = nil,
+                category: String? = nil, labels: [String] = [], rows: [PlayerStatRow] = []) {
+        self.teamId = teamId; self.teamName = teamName; self.teamAbbreviation = teamAbbreviation
+        self.teamLogoUrl = teamLogoUrl; self.category = category; self.labels = labels; self.rows = rows
+    }
+}
+
+public struct TeamStatComparison: Codable, Sendable, Equatable {
+    public var label: String
+    public var awayValue: String
+    public var homeValue: String
+    public init(label: String, awayValue: String, homeValue: String) {
+        self.label = label; self.awayValue = awayValue; self.homeValue = homeValue
+    }
+}
+
+public struct PlayerStatRow: Codable, Sendable, Equatable {
+    public var athleteId: String?
+    public var displayName: String
+    public var shortName: String?
+    public var headshotUrl: String?
+    public var jersey: String?
+    public var position: String?
+    public var stats: [String]
+    public init(athleteId: String? = nil, displayName: String, shortName: String? = nil, headshotUrl: String? = nil,
+                jersey: String? = nil, position: String? = nil, stats: [String] = []) {
+        self.athleteId = athleteId; self.displayName = displayName; self.shortName = shortName
+        self.headshotUrl = headshotUrl; self.jersey = jersey; self.position = position; self.stats = stats
+    }
+}
+
 public struct PlayerLeader: Codable, Sendable, Equatable {
     public var category: String
     public var teamLogoUrl: String?

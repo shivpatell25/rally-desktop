@@ -463,6 +463,7 @@ struct TvLiveCard: View {
     @EnvironmentObject var store: RallyStore
     private var id: String { "live-\(event.id)" }
     private var isLive: Bool { event.status == .live || event.status == .halftime }
+    private var isFinal: Bool { event.status == .finished }
     var body: some View {
         Button { if let fn = onSelect { fn() } else { store.show(.eventDetail(event)) } } label: {
             ZStack {
@@ -475,9 +476,9 @@ struct TvLiveCard: View {
                                startPoint: .top, endPoint: .bottom)
                 VStack(spacing: 0) {
                     HStack {
-                        Text(isLive ? "● LIVE" : "UPCOMING  ·  \(event.startTime.formatted(.dateTime.hour().minute()))")
+                        Text(isLive ? "● LIVE" : isFinal ? "FINAL" : "UPCOMING  ·  \(event.startTime.formatted(.dateTime.hour().minute()))")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(isLive ? RallyTheme.liveRed : RallyTheme.offWhite)
+                            .foregroundStyle(isLive || isFinal ? RallyTheme.liveRed : RallyTheme.offWhite)
                         Spacer()
                         Text(isLive ? (event.gameStatusDetail?.uppercased() ?? "") : event.startTime.formatted(.dateTime.month(.abbreviated).day()).uppercased())
                             .font(.system(size: 9, weight: .bold)).tracking(0.6)
@@ -487,7 +488,7 @@ struct TvLiveCard: View {
                     HStack(spacing: 0) {
                         teamLogo(event.awayTeam?.logoUrl, event.awayTeam?.abbreviation)
                         Spacer()
-                        if isLive {
+                        if isLive || isFinal {
                             HStack(spacing: 8) {
                                 Text(event.scoreAway.map(String.init) ?? "–").font(.system(size: 26, weight: .bold)).foregroundStyle(.white)
                                 Text("–").font(.system(size: 17)).foregroundStyle(RallyTheme.textTertiary)
@@ -593,24 +594,6 @@ struct TvSportCard: View {
 }
 
 // MARK: - LIVE destination
-
-struct TvLiveRow: View {
-    @Environment(\.tvMetrics) private var m: TvMetrics
-    @EnvironmentObject var store: RallyStore
-    @FocusState private var focus: String?
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
-                ForEach(store.liveEvents) { event in
-                    TvLiveCard(event: event, focus: $focus)
-                }
-            }
-            .padding(.horizontal, m.hPad).padding(.vertical, 14)
-        }
-        .background { AmbientBackground() }
-        .overlay { if store.liveEvents.isEmpty { Text("No games in progress").foregroundStyle(RallyTheme.textSecondary) } }
-    }
-}
 
 // MARK: - HIGHLIGHTS destination (finished games = recaps)
 

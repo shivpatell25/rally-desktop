@@ -52,6 +52,7 @@ private struct EspnVenue: Decodable {
 private struct EspnSummaryResponse: Decodable {
     var leaders: [EspnLeaderGroup]?
     var videos: [EspnVideo]?
+    var boxscore: EspnBoxscore?
 }
 private struct EspnLeaderGroup: Decodable {
     var team: EspnTeam?
@@ -108,7 +109,38 @@ private struct EspnHlsSource: Decodable {
 private struct EspnHref: Decodable {
     var href: String?
 }
-/// ESPN scoreboard client. Base + league map mirror Android `DataModule`/`EspnRepositoryImpl`.
+
+private struct EspnBoxscore: Decodable {
+    var teams: [EspnBoxscoreTeam]?
+    var players: [EspnBoxscorePlayerGroup]?
+}
+
+private struct EspnBoxscoreTeam: Decodable {
+    var team: EspnTeam?
+    var statistics: [EspnStatistic]?
+}
+
+private struct EspnStatistic: Decodable {
+    var name: String?
+    var displayValue: String?
+    var label: String?
+}
+
+private struct EspnBoxscorePlayerGroup: Decodable {
+    var team: EspnTeam?
+    var statistics: [EspnBoxscorePlayerCategory]?
+}
+
+private struct EspnBoxscorePlayerCategory: Decodable {
+    var name: String?
+    var labels: [String]?
+    var athletes: [EspnBoxscoreAthleteItem]?
+}
+
+private struct EspnBoxscoreAthleteItem: Decodable {
+    var athlete: EspnAthlete?
+    var stats: [String]?
+}
 public final class EspnClient: Sendable {
     public static let baseURL = "https://site.api.espn.com/apis/site/v2/"
     /// Domain league -> (sport, league) path. 1:1 with `espnLeagues` in EspnRepositoryImpl.kt.
@@ -182,23 +214,24 @@ public final class EspnClient: Sendable {
             scoreHome: home?.score.flatMap(Int.init), scoreAway: away?.score.flatMap(Int.init),
             sport: sport, league: domainLeague, venue: comp?.venue?.fullName, gameStatusDetail: detail)
     }
-
     public struct GameDetail: Sendable {
         public var leaders: [PlayerLeader]
         public var clips: [HighlightClip]
+        public var playerTables: [PlayerStatTable]
+        public var teamStats: [TeamStatComparison]
     }
 
     /// Per-game summary: leaders + highlight videos. Mirrors the
     /// getSummary enrichment in EspnRepositoryImpl.
-    public func fetchSummary(sport: String, league: String, eventId: String) async -> GameDetail {
+    public func fetchSummary(sport: String, league: String, eventId: String, awayAbbr: String? = nil, homeAbbr: String? = nil) async -> GameDetail {
         var comps = URLComponents(string: "\(Self.baseURL)sports/\(sport)/\(league)/summary")!
         comps.queryItems = [URLQueryItem(name: "event", value: eventId)]
-        guard let url = comps.url else { return GameDetail(leaders: [], clips: []) }
+        guard let url = comps.url else { return GameDetail(leaders: [], clips: [], playerTables: [], teamStats: []) }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("Rally/macOS", forHTTPHeaderField: "User-Agent")
         guard let (data, _) = try? await session.data(for: req),
               let summary = try? decoder.decode(EspnSummaryResponse.self, from: data) else {
-            return GameDetail(leaders: [], clips: [])
+            return GameDetail(leaders: [], clips: [], playerTables: [], teamStats: [])
         }
         var leaders: [PlayerLeader] = []
         for group in summary.leaders ?? [] {
@@ -229,7 +262,50 @@ public final class EspnClient: Sendable {
                 durationSeconds: video.duration, thumbnailUrl: video.thumbnail,
                 streamUrl: url, webUrl: video.links?.web?.href)
         }
-        return GameDetail(leaders: leaders, clips: clips)
+        var playerTables: [PlayerStatTable] = []
+        for group in summary.boxscore?.players ?? [] {
+            for category in group.statistics ?? [] {
+                let rows = (category.athletes ?? []).compactMap { item -> PlayerStatRow? in
+                    guard let a = item.athlete else { return nil }
+                    let name = a.displayName ?? a.shortName ?? a.fullName ?? ""
+                    if name.isEmpty { return nil }
+                    return PlayerStatRow(displayName: name, shortName: a.shortName,
+                        headshotUrl: a.headshot?.href, jersey: a.jersey,
+                        position: a.position?.abbreviation, stats: item.stats ?? [])
+                }
+                if rows.isEmpty { continue }
+                playerTables.append(PlayerStatTable(teamId: group.team?.id,
+                    teamName: group.team?.displayName ?? group.team?.name ?? "",
+                    teamAbbreviation: group.team?.abbreviation ?? "",
+                    teamLogoUrl: group.team?.logo, category: category.name,
+                    labels: category.labels ?? [], rows: rows))
+            }
+        }
+        let teamStats: [TeamStatComparison] = {
+            let teams = summary.boxscore?.teams ?? []
+            guard teams.count >= 2 else { return [] }
+            func stats(for abbr: String?) -> [EspnStatistic] {
+                guard let abbr else { return [] }
+                return teams.first(where: { $0.team?.abbreviation?.caseInsensitiveCompare(abbr) == .orderedSame })?.statistics ?? []
+            }
+            var awayStats = stats(for: awayAbbr)
+            var homeStats = stats(for: homeAbbr)
+            if awayStats.isEmpty || homeStats.isEmpty {
+                awayStats = teams.first?.statistics ?? []
+                homeStats = teams.dropFirst().first?.statistics ?? []
+            }
+            let byAbbr = ["A": awayStats, "H": homeStats]
+            let keys = Array(byAbbr.values.flatMap { $0.compactMap { $0.label ?? $0.name } })
+            var seen = Set<String>()
+            var out: [TeamStatComparison] = []
+            for key in keys where seen.insert(key).inserted {
+                guard let a = byAbbr["A"]?.first(where: { ($0.label ?? $0.name) == key })?.displayValue,
+                      let h = byAbbr["H"]?.first(where: { ($0.label ?? $0.name) == key })?.displayValue else { continue }
+                out.append(TeamStatComparison(label: key, awayValue: a, homeValue: h))
+            }
+            return out
+        }()
+        return GameDetail(leaders: leaders, clips: clips, playerTables: playerTables, teamStats: teamStats)
     }
 
     public static func path(forLeague domainLeague: String) -> (sport: String, path: String)? {

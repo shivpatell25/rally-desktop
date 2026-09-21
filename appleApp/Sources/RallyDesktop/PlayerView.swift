@@ -33,8 +33,11 @@ final class PlayerState: ObservableObject {
     @Published var trace: [String] = []
     @Published var isPlaying = false
     @Published var paused = false
+    @Published var muted = false
     @Published var leaders: [PlayerLeader] = []
     @Published var clips: [HighlightClip] = []
+    @Published var tables: [PlayerStatTable] = []
+    @Published var teamStats: [TeamStatComparison] = []
     @Published var detailLoading = false
     @Published var positionText = "0:00:00"
     @Published var positionFraction: Double = 0
@@ -78,9 +81,11 @@ final class PlayerState: ObservableObject {
         if let event, let path = EspnClient.path(forLeague: event.league) {
             detailLoading = true
             Task {
-                let detail = await store.espnClient.fetchSummary(sport: path.sport, league: path.path, eventId: event.id)
+                let detail = await store.espnClient.fetchSummary(sport: path.sport, league: path.path, eventId: event.id, awayAbbr: event.awayTeam?.abbreviation, homeAbbr: event.homeTeam?.abbreviation)
                 leaders = detail.leaders
                 clips = detail.clips
+                tables = detail.playerTables
+                teamStats = detail.teamStats
                 detailLoading = false
                 log("detail leaders=\(detail.leaders.count) clips=\(detail.clips.count)")
             }
@@ -105,6 +110,18 @@ final class PlayerState: ObservableObject {
         await play(PlayCandidate(title: clip.title, url: url, kind: .stremio,
                                  exactMatch: true, rank: 0, addonName: "ESPN"),
                    store: store, drawable: drawable)
+    }
+
+    /// Restart replays the current source from scratch.
+    func restart(store: RallyStore, drawable: NSView) async {
+        guard let p = primary else {
+            await retry(store: store, drawable: drawable)
+            return
+        }
+        error = nil
+        candidateNote[p.id] = nil
+        log("restarting \(p.title)")
+        await play(p, store: store, drawable: drawable)
     }
 
     /// Retry walks every candidate in rank order until one plays (v1 fallback chain).
@@ -185,6 +202,12 @@ final class PlayerState: ObservableObject {
         log(paused ? "paused" : "resumed")
     }
 
+    func toggleMute() {
+        engine.setMuted(slotId: slotId, muted: !muted)
+        muted = engine.isMuted(slotId: slotId)
+        log(muted ? "muted" : "unmuted")
+    }
+
     func refreshStats() {
         if let pos = engine.position(slotId: slotId) {
             positionFraction = pos.fraction
@@ -205,15 +228,14 @@ struct PlayerView: View {
     @StateObject var state = PlayerState()
     @State var host = NSView()
     @State private var started = false
-    @State private var controlsVisible = true
-    @State private var pickerVisible = false
+    @State var controlsVisible = true
+    @State var pickerVisible = false
     @State var gameMode = false
     @State var topTab = 0
     @State var infoTab = 0
     @FocusState var liveFocus: String?
-    @State private var diagVisible = false
+    @State var diagVisible = false
     @State private var lastMove = Date()
-    @State private var mouseMonitor: Any?
     let event: SportEvent?
     let channel: IptvChannel?
 
@@ -231,10 +253,6 @@ struct PlayerView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 state.refreshStats()
-                if state.isPlaying && !state.paused && !pickerVisible && !diagVisible
-                    && Date().timeIntervalSince(lastMove) > 6.5 {
-                    controlsVisible = false
-                }
             }
         }
         .onAppear {
@@ -243,17 +261,12 @@ struct PlayerView: View {
                 started = true
                 Task { await state.load(event: event, channel: channel, store: store, drawable: host) }
             }
-            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { ev in
-                lastMove = Date()
-                if state.isPlaying && !pickerVisible && !diagVisible {
-                    controlsVisible = true
-                }
-                return ev
-            }
         }
         .onDisappear {
-            if let m = mouseMonitor { NSEvent.removeMonitor(m) }
             state.teardown()
+        }
+        .onHover { hovering in
+            controlsVisible = hovering || pickerVisible || diagVisible
         }
     }
 
@@ -261,11 +274,6 @@ struct PlayerView: View {
         ZStack {
             VideoHost(host: host)
             .background(Color.black)
-            .onTapGesture {
-                guard !pickerVisible && !diagVisible else { return }
-                controlsVisible.toggle()
-                lastMove = Date()
-            }
             // Top + bottom scrims (mirrors PlaybackHud gradients).
             if controlsVisible || pickerVisible || diagVisible {
                 VStack {
@@ -340,16 +348,20 @@ struct PlayerView: View {
                     .foregroundStyle(RallyTheme.textSecondary)
             }
             HStack(spacing: 10) {
-                Button(state.paused ? "▶" : "❚❚") { state.togglePause(); lastMove = Date() }
+                Button(state.paused ? "▶" : "❚❚") { state.togglePause() }
                     .buttonStyle(.plain).font(.system(size: 13, weight: .bold))
                     .foregroundStyle(RallyTheme.textPrimary)
                     .disabled(!state.isPlaying)
                     .keyboardShortcut(.space, modifiers: [])
-                if event != nil {
-                    playerButton("Game View", primary: true) { gameMode = true; lastMove = Date() }
+                playerButton("Restart") {
+                    Task { await state.restart(store: store, drawable: host) }
                 }
-                playerButton("Sources") { pickerVisible = true; lastMove = Date() }
-                playerButton("Diagnostics") { diagVisible.toggle(); lastMove = Date() }
+                playerButton("Fullscreen") { toggleFullscreen() }
+                if event != nil {
+                    playerButton("Game View", primary: true) { gameMode = true }
+                }
+                playerButton("Sources") { pickerVisible = true }
+                playerButton("Diagnostics") { diagVisible.toggle() }
                 playerButton("Multi-View (\(store.multiView.tiles.count))") { store.show(.multiView) }
                 if let p = state.primary {
                     Text(specsLine(p)).font(.system(size: 11, weight: .semibold))
@@ -377,6 +389,10 @@ struct PlayerView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+
+    private func toggleFullscreen() {
+        NSApp.keyWindow?.toggleFullScreen(nil)
     }
 
     private func scoreLine(_ event: SportEvent) -> String {
@@ -522,7 +538,7 @@ struct PlayerView: View {
 
     // MARK: Diagnostics (trace + specs)
 
-    private var diagnosticsPanel: some View {
+    var diagnosticsPanel: some View {
         HStack {
             Spacer()
             VStack(alignment: .leading, spacing: 6) {

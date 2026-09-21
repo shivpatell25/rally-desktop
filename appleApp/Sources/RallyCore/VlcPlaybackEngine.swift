@@ -88,6 +88,17 @@ public final class VlcEngine: @unchecked Sendable {
     }
 
     @MainActor
+    public func setMuted(slotId: String, muted: Bool) {
+        guard let player = lock.withLock({ players[slotId] }) else { return }
+        player.audio?.volume = muted ? 0 : 100
+    }
+
+    @MainActor
+    public func isMuted(slotId: String) -> Bool {
+        (lock.withLock({ players[slotId] })?.audio?.volume ?? 100) == 0
+    }
+
+    @MainActor
     public func isPlaying(slotId: String) -> Bool {
         lock.withLock { players[slotId] }?.isPlaying ?? false
     }

@@ -24,7 +24,7 @@ enum RallyTab: Int, Hashable {
 /// multi-view transitions always surface (SwiftUI presents one sheet per level).
 enum AppSheet: Identifiable {
     case eventDetail(SportEvent)
-    case player(event: SportEvent?, channel: IptvChannel?)
+    case player(event: SportEvent?, channel: IptvChannel?, clip: HighlightClip? = nil)
     case multiView
     case search
     case settings
@@ -32,7 +32,8 @@ enum AppSheet: Identifiable {
     var id: String {
         switch self {
         case .eventDetail(let e): return "event-\(e.id)"
-        case .player(let e, let c): return "player-\(e?.id ?? c?.id ?? "none")"
+        case .player(let e, let c, let clip):
+            return "player-\(e?.id ?? c?.id ?? "none")-\(clip?.id ?? "live")"
         case .multiView: return "multiview"
         case .search: return "search"
         case .settings: return "settings"
@@ -47,6 +48,8 @@ final class RallyStore: ObservableObject {
     @Published var pendingLeague: String?
     @Published var update: RallyRelease?
     @Published var channels: [IptvChannel] = []
+    @Published var highlights: [GameHighlight] = []
+    @Published var highlightsLoading = false
     @Published var connectionStatus: String?
     @Published var tab: RallyTab = .home
     let settings = SettingsStore()
@@ -65,6 +68,43 @@ final class RallyStore: ObservableObject {
     private let updates = UpdateChecker()
     private var stalker: StalkerClient?
     private var xtream: XtreamClient?
+    func refreshChannels() async {
+        let (s, x) = providers()
+        channels = settings.iptvProvider == .stalker ? await s.getChannels() : await x.getChannels()
+    }
+
+    func ensureChannels() async {
+        if channels.isEmpty { await refreshChannels() }
+    }
+
+    func guide(for channel: IptvChannel) async -> ChannelGuide? {
+        let (s, x) = providers()
+        return settings.iptvProvider == .stalker
+            ? await s.getGuide(channelId: channel.id)
+            : await x.getGuide(channelId: channel.id)
+    }
+
+    /// Aggregates ESPN highlight clips across live + finished games (cap 10
+    /// summaries). Mirrors the HighlightsViewModel item flow.
+    func refreshHighlights() async {
+        guard !highlightsLoading else { return }
+        highlightsLoading = true
+        defer { highlightsLoading = false }
+        let seeds = Array((liveEvents + events.filter { $0.status == .finished }).prefix(10))
+        let pairs = await withTaskGroup(of: (SportEvent, [HighlightClip]).self) { group in
+            for e in seeds {
+                group.addTask {
+                    guard let path = EspnClient.path(forLeague: e.league) else { return (e, []) }
+                    let detail = await self.espn.fetchSummary(sport: path.sport, league: path.path, eventId: e.id)
+                    return (e, detail.clips)
+                }
+            }
+            var out: [(SportEvent, [HighlightClip])] = []
+            for await pair in group { out.append(pair) }
+            return out
+        }
+        highlights = pairs.flatMap { e, clips in clips.map { GameHighlight(clip: $0, event: e) } }
+    }
 
     private func providers() -> (StalkerClient, XtreamClient) {
         if let s = stalker, let x = xtream { return (s, x) }
@@ -91,11 +131,6 @@ final class RallyStore: ObservableObject {
         self.addonManifests = manifests
     }
 
-    func refreshChannels() async {
-        let (s, x) = providers()
-        channels = settings.iptvProvider == .stalker ? await s.getChannels() : await x.getChannels()
-    }
-
     func testConnection() async {
         connectionStatus = "Testing…"
         let (s, x) = providers()
@@ -109,7 +144,13 @@ final class RallyStore: ObservableObject {
     }
 }
 
-/// Screenshot/test deep links: `--tv=leagues|live|highlights|myteams`, `--event=<id|first>`.
+/// An ESPN highlight clip linked to its game. Mirrors HighlightItem.
+struct GameHighlight: Identifiable {
+    var id: String { clip.id }
+    var clip: HighlightClip
+    var event: SportEvent
+}
+
 enum LaunchArgs {
     static var destination: TvDestination {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--tv=") }) else { return .home }
@@ -162,7 +203,7 @@ struct ContentView: View {
                     Group {
                         switch destination {
                         case .home: TvHomeDashboard(destination: $destination)
-                        case .live: TvLiveRow()
+                        case .live: TvLiveTv()
                         case .leagues: TvLeaguesHome()
                         case .highlights: TvHighlights()
                         case .myTeams: TvMyTeams()
@@ -173,7 +214,7 @@ struct ContentView: View {
                         removal: .move(edge: slideEdge == .trailing ? .leading : .trailing).combined(with: .opacity)))
                 }
                 // Fullscreen takeover: the player covers chrome and content.
-                if case .player(let event, let channel) = store.sheet {
+                if case .player(let event, let channel, _) = store.sheet {
                     PlayerView(event: event, channel: channel)
                         .environmentObject(store)
                         .environmentObject(store.settings)
