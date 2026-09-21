@@ -122,13 +122,13 @@ struct TvHomeDashboard: View {
     @EnvironmentObject var store: RallyStore
     @Binding var destination: TvDestination
     @FocusState private var focus: String?
+    @State private var livePage = 0
+    @State private var sportPage = 0
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 12) {
                 TvHero(featured: store.featuredEvent, mode: store.heroMode, focus: $focus)
-                shelfTitle(store.liveEvents.isEmpty ? "UPCOMING" : "LIVE / UPCOMING")
                 liveShelf
-                shelfTitle("BY SPORT")
                 sportShelf
             }
             .padding(.horizontal, m.hPad)
@@ -143,38 +143,42 @@ struct TvHomeDashboard: View {
             .padding(.top, 6)
     }
 
+    private var liveItems: [SportEvent] { Array((store.liveEvents + store.upcomingEvents).prefix(15)) }
+
     private var liveShelf: some View {
-        let items = Array((store.liveEvents + store.upcomingEvents).prefix(15))
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
-                ForEach(items) { event in
-                    TvLiveCard(event: event, focus: $focus)
-                }
-            }
-            .padding(.vertical, 6)
+        PagedShelf(title: store.liveEvents.isEmpty ? "UPCOMING" : "LIVE / UPCOMING",
+                   items: liveItems, pageSize: 4, aspect: 300.0 / 170.0,
+                   idFor: { "live-\($0.id)" }, focus: $focus, page: $livePage) { event, size, focus in
+            TvLiveCard(event: event, focus: focus, size: size)
         }
     }
 
     private var sportShelf: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
-                ForEach(store.leagueShelves, id: \.title) { shelf in
-                    TvSportCard(title: shelf.title, events: shelf.events, focus: $focus) {
-                        store.pendingLeague = shelf.title
-                        destination = .leagues
-                    }
-                }
+        PagedShelf(title: "BY SPORT", items: store.leagueShelves, pageSize: 5, aspect: 200.0 / 150.0,
+                   idFor: { "sport-\($0.title)" }, focus: $focus, page: $sportPage) { shelf, size, focus in
+            TvSportCard(title: shelf.title, events: shelf.events, focus: focus, size: size) {
+                store.pendingLeague = shelf.title
+                destination = .leagues
             }
-            .padding(.vertical, 6)
         }
     }
 
+    private func liveVisibleIds() -> [String] {
+        Array((store.liveEvents + store.upcomingEvents).prefix(15))
+            .dropFirst(livePage * 4).prefix(4).map { "live-\($0.id)" }
+    }
+
+    private func sportVisibleIds() -> [String] {
+        Array(store.leagueShelves.dropFirst(sportPage * 5).prefix(5)).map { "sport-\($0.title)" }
+    }
+
+    /// Vertical walk only; PagedShelf owns left/right inside its row.
+    /// Hero row keeps left/right between its two buttons.
     private func moveFocus(_ dir: MoveCommandDirection) {
-        // Reading-order focus walk: hero, live row, sport row. Mirrors D-pad.
         var rows: [[String]] = []
         rows.append(["hero-watch", "hero-details"])
-        rows.append((store.liveEvents + store.upcomingEvents).prefix(15).map { "live-\($0.id)" })
-        rows.append(store.leagueShelves.map { "sport-\($0.title)" })
+        rows.append(liveVisibleIds())
+        rows.append(sportVisibleIds())
         let flat = rows.enumerated().flatMap { r, ids in ids.map { (r, $0) } }
         guard let cur = focus, let pos = flat.firstIndex(where: { $0.1 == cur }) else {
             focus = rows.first?.first
@@ -183,8 +187,8 @@ struct TvHomeDashboard: View {
         let (r, _) = flat[pos]
         let col = rows[r].firstIndex(of: cur) ?? 0
         switch dir {
-        case .left: focus = rows[r][max(0, col - 1)]
-        case .right: focus = rows[r][min(rows[r].count - 1, col + 1)]
+        case .left where r == 0: focus = rows[r][max(0, col - 1)]
+        case .right where r == 0: focus = rows[r][min(rows[r].count - 1, col + 1)]
         case .up: focus = r > 0 ? rows[r - 1][min(col, rows[r - 1].count - 1)] : rows[r][col]
         case .down: focus = r < rows.count - 1 ? rows[r + 1][min(col, rows[r + 1].count - 1)] : rows[r][col]
         default: break
@@ -371,6 +375,7 @@ struct TvLiveCard: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     var event: SportEvent
     var focus: FocusState<String?>.Binding
+    var size: CGSize?
     @EnvironmentObject var store: RallyStore
     private var id: String { "live-\(event.id)" }
     private var isLive: Bool { event.status == .live || event.status == .halftime }
@@ -417,7 +422,7 @@ struct TvLiveCard: View {
                 }
                 .padding(.horizontal, 15).padding(.vertical, 11)
             }
-            .frame(width: m.liveCard.width, height: m.liveCard.height)
+            .frame(width: (size ?? m.liveCard).width, height: (size ?? m.liveCard).height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
@@ -450,6 +455,7 @@ struct TvSportCard: View {
     var title: String
     var events: [SportEvent]
     var focus: FocusState<String?>.Binding
+    var size: CGSize?
     @EnvironmentObject var store: RallyStore
     var onSelect: () -> Void = {}
     private var id: String { "sport-\(title)" }
@@ -468,7 +474,7 @@ struct TvSportCard: View {
                     if liveCount > 0 {
                         Text("●  \(liveCount) LIVE").font(.system(size: 9, weight: .bold))
                             .foregroundStyle(RallyTheme.liveRed)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: 120, alignment: .leading)
                     } else {
                         Spacer().frame(height: 10)
                     }
@@ -488,7 +494,7 @@ struct TvSportCard: View {
                 }
                 .padding(12)
             }
-            .frame(width: m.sportCard.width, height: m.sportCard.height)
+            .frame(width: (size ?? m.sportCard).width, height: (size ?? m.sportCard).height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
