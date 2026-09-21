@@ -30,3 +30,5 @@ appleApp/dist/
 # .NET
 bin/
 obj/
+
+.build/
