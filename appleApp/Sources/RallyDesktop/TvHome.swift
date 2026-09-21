@@ -28,6 +28,7 @@ struct RallyTopBar: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 150, height: 30, alignment: .leading)
+            } else {
                 Text("rally").font(.system(size: 30, weight: .black, design: .rounded))
                     .foregroundStyle(RallyTheme.rallyLime)
             }
@@ -459,14 +460,13 @@ struct TvSportCard: View {
                                         Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.9)],
                                startPoint: .top, endPoint: .bottom)
                 VStack(spacing: 0) {
-                    HStack {
-                        if liveCount > 0 {
-                            Text("●  \(liveCount) LIVE").font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(RallyTheme.liveRed)
-                        }
-                        Spacer()
+                    if liveCount > 0 {
+                        Text("●  \(liveCount) LIVE").font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(RallyTheme.liveRed)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Spacer().frame(height: 10)
                     }
-                    Spacer()
                     if let mark = Artwork.leagueMark(league: title), let img = tvArt(mark) {
                         Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
                             .frame(width: 72, height: 56)

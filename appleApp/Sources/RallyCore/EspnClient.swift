@@ -30,6 +30,11 @@ private struct EspnCompetitor: Decodable {
     var homeAway: String?
     var team: EspnTeam?
     var score: String?
+    var records: [EspnRecord]?
+}
+private struct EspnRecord: Decodable {
+    var name: String?
+    var summary: String?
 }
 private struct EspnTeam: Decodable {
     var id: String?
@@ -81,9 +86,11 @@ public final class EspnClient: Sendable {
         }
     }
 
-    public func fetchScoreboard(sport: String, league: String, domainLeague: String, limit: Int = 100) async throws -> [SportEvent] {
+    public func fetchScoreboard(sport: String, league: String, domainLeague: String, limit: Int = 100, dates: String? = nil) async throws -> [SportEvent] {
         var comps = URLComponents(string: "\(Self.baseURL)sports/\(sport)/\(league)/scoreboard")!
-        comps.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        var items = [URLQueryItem(name: "limit", value: String(limit))]
+        if let dates { items.append(URLQueryItem(name: "dates", value: dates)) }
+        comps.queryItems = items
         guard let url = comps.url else { return [] }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue("Rally/macOS", forHTTPHeaderField: "User-Agent")
@@ -99,7 +106,8 @@ public final class EspnClient: Sendable {
         func team(_ c: EspnCompetitor?) -> Team? {
             guard let t = c?.team else { return nil }
             return Team(id: t.id ?? UUID().uuidString, name: t.displayName ?? t.name ?? "?",
-                        abbreviation: t.abbreviation ?? "?", logoUrl: t.logo)
+                        abbreviation: t.abbreviation ?? "?", logoUrl: t.logo,
+                        records: (c?.records ?? []).map { TeamRecord(name: $0.name, summary: $0.summary) })
         }
         let state = comp?.status?.type?.state?.lowercased() ?? ""
         let name = comp?.status?.type?.name?.lowercased() ?? ""

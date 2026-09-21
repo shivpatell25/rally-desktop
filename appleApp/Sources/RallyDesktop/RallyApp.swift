@@ -34,6 +34,8 @@ final class RallyStore: ObservableObject {
     private let espn = EspnClient()
     @Published var selectedEvent: SportEvent?
     @Published var selectedChannel: IptvChannel?
+    @Published var playEvent: SportEvent?
+    @Published var playChannel: IptvChannel?
     @Published var showingMultiView = false
     let multiView = MultiViewState()
 
@@ -88,9 +90,33 @@ final class RallyStore: ObservableObject {
     }
 }
 
+/// Screenshot/test deep links: `--tv=leagues|live|highlights|myteams`, `--event=<id|first>`.
+enum LaunchArgs {
+    static var destination: TvDestination {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--tv=") }) else { return .home }
+        switch arg.dropFirst(5) {
+        case "live": return .live
+        case "leagues": return .leagues
+        case "highlights": return .highlights
+        case "myteams": return .myTeams
+        default: return .home
+        }
+    }
+    static var league: String? {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--league=") }) else { return nil }
+        let l = String(arg.dropFirst(9))
+        return l.isEmpty ? nil : l
+    }
+    static var eventId: String? {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--event=") }) else { return nil }
+        let id = String(arg.dropFirst(8))
+        return id.isEmpty ? nil : id
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: RallyStore
-    @State private var destination: TvDestination = .home
+    @State private var destination: TvDestination = LaunchArgs.destination
     @State private var showingSearch = false
     @State private var showingSettings = false
     var body: some View {
@@ -99,20 +125,34 @@ struct ContentView: View {
             switch destination {
             case .home: TvHomeDashboard(destination: $destination)
             case .live: TvLiveRow()
-            case .leagues: LeaguesView()
+            case .leagues: TvLeaguesHome()
             case .highlights: TvHighlights()
             case .myTeams: TvMyTeams()
             }
         }
         .background(RallyTheme.background)
-        .task { await store.refresh(); await store.checkUpdates() }
+        .task {
+            await store.refresh()
+            await store.checkUpdates()
+            if let league = LaunchArgs.league { store.pendingLeague = league }
+            if let id = LaunchArgs.eventId {
+                if let e = store.events.first(where: { $0.id == id }) { store.selectedEvent = e }
+                else if let e = store.featuredEvent { store.selectedEvent = e }
+            }
+        }
         .sheet(item: $store.selectedEvent) { event in
+            TvEventDetail(event: event)
+                .environmentObject(store)
+                .environmentObject(store.settings)
+                .frame(minWidth: 1000, minHeight: 700)
+        }
+        .sheet(item: $store.playEvent) { event in
             PlayerView(event: event, channel: nil)
                 .environmentObject(store)
                 .environmentObject(store.settings)
                 .frame(minWidth: 900, minHeight: 600)
         }
-        .sheet(item: $store.selectedChannel) { channel in
+        .sheet(item: $store.playChannel) { channel in
             PlayerView(event: nil, channel: channel)
                 .environmentObject(store)
                 .environmentObject(store.settings)

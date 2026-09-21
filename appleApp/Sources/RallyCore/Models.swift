@@ -21,10 +21,17 @@ public struct Team: Codable, Sendable, Equatable, Identifiable {
     public var abbreviation: String
     public var logoUrl: String?
     public var colors: [String]
-    public init(id: String, name: String, abbreviation: String, logoUrl: String? = nil, colors: [String] = []) {
+    public var records: [TeamRecord]
+    public init(id: String, name: String, abbreviation: String, logoUrl: String? = nil, colors: [String] = [], records: [TeamRecord] = []) {
         self.id = id; self.name = name; self.abbreviation = abbreviation
-        self.logoUrl = logoUrl; self.colors = colors
+        self.logoUrl = logoUrl; self.colors = colors; self.records = records
     }
+}
+
+public struct TeamRecord: Codable, Sendable, Equatable {
+    public var name: String?
+    public var summary: String?
+    public init(name: String? = nil, summary: String? = nil) { self.name = name; self.summary = summary }
 }
 
 public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
