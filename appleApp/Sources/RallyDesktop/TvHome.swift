@@ -246,10 +246,10 @@ struct TvHero: View {
                             .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                         HStack(spacing: 12) {
                             tvButton(primaryText, primary: true, id: "hero-watch", focus: focus) {
-                                store.selectedEvent = event
+                                store.show(.eventDetail(event))
                             }
                             tvButton("Details", id: "hero-details", focus: focus) {
-                                store.selectedEvent = event
+                                store.show(.eventDetail(event))
                             }
                         }
                     }
@@ -371,7 +371,7 @@ struct TvLiveCard: View {
     private var id: String { "live-\(event.id)" }
     private var isLive: Bool { event.status == .live || event.status == .halftime }
     var body: some View {
-        Button { store.selectedEvent = event } label: {
+        Button { store.show(.eventDetail(event)) } label: {
             ZStack {
                 if let img = tvArt(Artwork.shelfBackdrop(event: event)) {
                     Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
@@ -552,7 +552,7 @@ struct TvMyTeams: View {
                         Text("No upcoming games").font(.caption).foregroundStyle(RallyTheme.textTertiary)
                     }
                     ForEach(Array(next)) { event in
-                        GameRow(event: event).onTapGesture { store.selectedEvent = event }
+                        GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
                     }
                 }
             }

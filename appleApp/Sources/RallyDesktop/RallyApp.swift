@@ -20,6 +20,25 @@ enum RallyTab: Int, Hashable {
     case home, leagues, search, settings
 }
 
+/// Every modal in the app flows through one slot, so detail → player →
+/// multi-view transitions always surface (SwiftUI presents one sheet per level).
+enum AppSheet: Identifiable {
+    case eventDetail(SportEvent)
+    case player(event: SportEvent?, channel: IptvChannel?)
+    case multiView
+    case search
+    case settings
+
+    var id: String {
+        switch self {
+        case .eventDetail(let e): return "event-\(e.id)"
+        case .player(let e, let c): return "player-\(e?.id ?? c?.id ?? "none")"
+        case .multiView: return "multiview"
+        case .search: return "search"
+        case .settings: return "settings"
+        }
+    }
+}
 @MainActor
 final class RallyStore: ObservableObject {
     @Published var events: [SportEvent] = []
@@ -32,12 +51,11 @@ final class RallyStore: ObservableObject {
     @Published var tab: RallyTab = .home
     let settings = SettingsStore()
     private let espn = EspnClient()
-    @Published var selectedEvent: SportEvent?
-    @Published var selectedChannel: IptvChannel?
-    @Published var playEvent: SportEvent?
-    @Published var playChannel: IptvChannel?
-    @Published var showingMultiView = false
+    @Published var sheet: AppSheet?
     let multiView = MultiViewState()
+
+    /// Single-sheet router: one presentation slot, so detail → player always surfaces.
+    func show(_ sheet: AppSheet?) { self.sheet = sheet }
 
     var stremioClient: StremioClient { stremio }
     var stalkerClient: StalkerClient { providers().0 }
@@ -112,16 +130,21 @@ enum LaunchArgs {
         let id = String(arg.dropFirst(8))
         return id.isEmpty ? nil : id
     }
+    static var playId: String? {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--play=") }) else { return nil }
+        let id = String(arg.dropFirst(7))
+        return id.isEmpty ? nil : id
+    }
 }
 
 struct ContentView: View {
     @EnvironmentObject var store: RallyStore
     @State private var destination: TvDestination = LaunchArgs.destination
-    @State private var showingSearch = false
-    @State private var showingSettings = false
     var body: some View {
         VStack(spacing: 0) {
-            RallyTopBar(destination: $destination, onSearch: { showingSearch = true }, onSettings: { showingSettings = true })
+            RallyTopBar(destination: $destination,
+                        onSearch: { store.show(.search) },
+                        onSettings: { store.show(.settings) })
             switch destination {
             case .home: TvHomeDashboard(destination: $destination)
             case .live: TvLiveRow()
@@ -136,45 +159,34 @@ struct ContentView: View {
             await store.checkUpdates()
             if let league = LaunchArgs.league { store.pendingLeague = league }
             if let id = LaunchArgs.eventId {
-                if let e = store.events.first(where: { $0.id == id }) { store.selectedEvent = e }
-                else if let e = store.featuredEvent { store.selectedEvent = e }
+                if let e = store.events.first(where: { $0.id == id }) { store.show(.eventDetail(e)) }
+                else if let e = store.featuredEvent { store.show(.eventDetail(e)) }
+            } else if let id = LaunchArgs.playId {
+                if let e = store.events.first(where: { $0.id == id }) { store.show(.player(event: e, channel: nil)) }
+                else if let e = store.featuredEvent { store.show(.player(event: e, channel: nil)) }
+            }
+            if let id = LaunchArgs.eventId {
+                if let e = store.events.first(where: { $0.id == id }) { store.show(.eventDetail(e)) }
+                else if let e = store.featuredEvent { store.show(.eventDetail(e)) }
             }
         }
-        .sheet(item: $store.selectedEvent) { event in
-            TvEventDetail(event: event)
-                .environmentObject(store)
-                .environmentObject(store.settings)
-                .frame(minWidth: 1000, minHeight: 700)
-        }
-        .sheet(item: $store.playEvent) { event in
-            PlayerView(event: event, channel: nil)
-                .environmentObject(store)
-                .environmentObject(store.settings)
-                .frame(minWidth: 900, minHeight: 600)
-        }
-        .sheet(item: $store.playChannel) { channel in
-            PlayerView(event: nil, channel: channel)
-                .environmentObject(store)
-                .environmentObject(store.settings)
-                .frame(minWidth: 900, minHeight: 600)
-        }
-        .sheet(isPresented: $store.showingMultiView) {
-            MultiViewView(state: store.multiView)
-                .environmentObject(store)
-                .environmentObject(store.settings)
-                .frame(minWidth: 900, minHeight: 600)
-        }
-        .sheet(isPresented: $showingSearch) {
-            SearchView()
-                .environmentObject(store)
-                .environmentObject(store.settings)
-                .frame(minWidth: 700, minHeight: 500)
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView()
-                .environmentObject(store)
-                .environmentObject(store.settings)
-                .frame(minWidth: 700, minHeight: 550)
+        .sheet(item: $store.sheet) { sheet in
+            Group {
+                switch sheet {
+                case .eventDetail(let event):
+                    TvEventDetail(event: event).frame(minWidth: 1000, minHeight: 700)
+                case .player(let event, let channel):
+                    PlayerView(event: event, channel: channel).frame(minWidth: 900, minHeight: 600)
+                case .multiView:
+                    MultiViewView(state: store.multiView).frame(minWidth: 900, minHeight: 600)
+                case .search:
+                    SearchView().frame(minWidth: 700, minHeight: 500)
+                case .settings:
+                    SettingsView().frame(minWidth: 700, minHeight: 550)
+                }
+            }
+            .environmentObject(store)
+            .environmentObject(store.settings)
         }
     }
 }
@@ -185,7 +197,7 @@ struct HomeView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220))], spacing: 16) {
                 ForEach(store.events.prefix(60)) { event in
-                    GameCard(event: event).onTapGesture { store.selectedEvent = event }
+                    GameCard(event: event).onTapGesture { store.show(.eventDetail(event)) }
                 }
             }
             .padding(20)
@@ -205,7 +217,7 @@ struct LeaguesView: View {
                 if !games.isEmpty {
                     Section("\(league) (\(games.count))") {
                         ForEach(games.prefix(30)) { event in
-                            GameRow(event: event).onTapGesture { store.selectedEvent = event }
+                            GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
                         }
                     }
                 }
@@ -225,7 +237,7 @@ struct SearchView: View {
                 .padding([.horizontal, .top])
             List {
                 ForEach(filteredEvents) { event in
-                    GameRow(event: event).onTapGesture { store.selectedEvent = event }
+                    GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
                 }
                 if !query.isEmpty {
                     Section("Channels") {
@@ -238,7 +250,7 @@ struct SearchView: View {
                                 }
                             }
                             .contentShape(Rectangle())
-                            .onTapGesture { store.selectedChannel = channel }
+                            .onTapGesture { store.show(.player(event: nil, channel: channel)) }
                         }
                     }
                 }

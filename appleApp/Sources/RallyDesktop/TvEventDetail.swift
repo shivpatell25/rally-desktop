@@ -76,12 +76,12 @@ struct TvEventDetail: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                     HStack(spacing: 10) {
-                        Button { store.playEvent = event } label: {
+                        Button { store.show(.player(event: event, channel: nil)) } label: {
                             Text(isLive ? "Watch live" : "Watch").font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.black).padding(.horizontal, 24).padding(.vertical, 10)
                                 .background(RallyTheme.offWhite).clipShape(RoundedRectangle(cornerRadius: 16))
                         }.buttonStyle(.plain)
-                        Button { store.playEvent = event } label: {
+                        Button { store.show(.player(event: event, channel: nil)) } label: {
                             Text("Pick source").font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(RallyTheme.textPrimary).padding(.horizontal, 24).padding(.vertical, 10)
                                 .background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 16))

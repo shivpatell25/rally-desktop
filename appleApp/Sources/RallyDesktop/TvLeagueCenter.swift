@@ -167,7 +167,7 @@ struct TvPortraitCard: View {
     private var isLive: Bool { event.status == .live || event.status == .halftime }
     private var isFinal: Bool { event.status == .finished }
     var body: some View {
-        Button { store.selectedEvent = event } label: {
+        Button { store.show(.eventDetail(event)) } label: {
             ZStack {
                 if let img = tvArt(Artwork.shelfBackdrop(event: event)) {
                     Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)

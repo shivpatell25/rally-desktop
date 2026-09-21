@@ -23,18 +23,30 @@ final class PlayerState: ObservableObject {
     @Published var isLoading = true
     @Published var error: String?
     @Published var isPlaying = false
+    /// Per-candidate status shown in the picker (resolving / ready / failure reason).
+    @Published var candidateNote: [String: String] = [:]
+    /// Ring buffer of load trace lines, mirrored to Console (no URLs with credentials).
+    @Published var trace: [String] = []
 
     let engine = VlcEngine()
     private let slotId = UUID().uuidString
     private var startedAt = Date()
 
+    private func log(_ line: String) {
+        let stamped = "[Player] \(line)"
+        trace.append(stamped)
+        if trace.count > 30 { trace.removeFirst(trace.count - 30) }
+        NSLog("%@", stamped)
+    }
     func load(event: SportEvent?, channel: IptvChannel?, store: RallyStore, drawable: NSView) async {
         isLoading = true
         error = nil
+        candidateNote = [:]
         defer { isLoading = false }
         var cands: [PlayCandidate] = []
         if let event {
             let addons = store.settings.stremioAddonUrls
+            log("event=\(event.id) addons=\(addons.count) channels=\(store.channels.count)")
             let options = await withTaskGroup(of: [StremioStreamOption].self) { group in
                 for base in addons {
                     group.addTask { await store.stremioClient.findStreams(for: event, addonBase: base) }
@@ -43,13 +55,17 @@ final class PlayerState: ObservableObject {
                 for await opts in group { out.append(contentsOf: opts) }
                 return out
             }
+            log("stremio options=\(options.count) (playable=\(options.filter { $0.isDirectPlayable }.count))")
             cands = StreamResolver.candidates(event: event, channels: store.channels, stremioOptions: options)
         } else if let channel {
+            log("direct channel=\(channel.id)")
             cands = StreamResolver.channelCandidates([channel])
         }
         candidates = cands
+        log("candidates=\(cands.count) stremio=\(cands.filter { $0.kind == .stremio }.count) iptv=\(cands.filter { $0.kind == .iptv }.count)")
         guard let first = cands.first else {
             error = "No playable sources found"
+            log("empty: check addon URLs and IPTV provider in Settings")
             return
         }
         await play(first, store: store, drawable: drawable)
@@ -59,12 +75,22 @@ final class PlayerState: ObservableObject {
         await play(candidate, store: store, drawable: drawable)
     }
 
+    /// Retry walks every candidate in rank order until one plays (v1 fallback chain).
     func retry(store: RallyStore, drawable: NSView) async {
-        if let primary { await play(primary, store: store, drawable: drawable) }
+        error = nil
+        for cand in candidates {
+            if candidateNote[cand.id] == nil || cand.id == primary?.id {
+                await play(cand, store: store, drawable: drawable)
+                if isPlaying { return }
+            }
+        }
+        if !isPlaying, error == nil { error = "All sources failed" }
+        log("retry done playing=\(isPlaying)")
     }
 
     private func play(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
         error = nil
+        candidateNote[candidate.id] = "Resolving…"
         var urlString = candidate.url
         // Resolve provider-issued URLs (Stalker cmd / bare xtream ids).
         if candidate.kind == .iptv, let ch = candidate.channel {
@@ -79,11 +105,14 @@ final class PlayerState: ObservableObject {
                 }
             }
         }
-        guard let url = URL(string: urlString) else {
+        guard let url = URL(string: urlString), let host = url.host else {
+            candidateNote[candidate.id] = "Bad stream URL"
             error = "Bad stream URL"
             store.settings.recordStreamFailure(target: candidate.url)
+            log("bad url kind=\(candidate.kind)")
             return
         }
+        log("try kind=\(candidate.kind) host=\(host) exact=\(candidate.exactMatch)")
         startedAt = Date()
         do {
             _ = engine.reserve(slotId: slotId)
@@ -91,11 +120,15 @@ final class PlayerState: ObservableObject {
                             headers: candidate.headers ?? channelHeaders(store, candidate), drawable: drawable)
             primary = candidate
             isPlaying = true
+            candidateNote[candidate.id] = "Playing"
             let ms = Int64(Date().timeIntervalSince(startedAt) * 1000)
             store.settings.recordStreamSuccess(target: candidate.url, startupMs: ms)
+            log("playing startupMs=\(ms)")
         } catch {
+            candidateNote[candidate.id] = "Failed: \(error.localizedDescription)"
             self.error = "Playback failed: \(error.localizedDescription)"
             store.settings.recordStreamFailure(target: candidate.url)
+            log("failed: \(error.localizedDescription)")
         }
     }
 
@@ -155,29 +188,56 @@ struct PlayerView: View {
             .frame(minWidth: 500)
             VStack(alignment: .leading) {
                 Text("Sources (\(state.candidates.count))").font(.headline).padding([.top, .horizontal])
-                List(state.candidates) { cand in
-                    Button {
-                        if let d = drawable { Task { await state.switchTo(cand, store: store, drawable: d) } }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(cand.title).font(.callout).lineLimit(2)
-                                if let addon = cand.addonName {
-                                    Text(addon).font(.caption).foregroundStyle(RallyTheme.textTertiary)
-                                }
-                            }
-                            if cand.exactMatch {
-                                Text("MATCH").font(.caption2.bold()).foregroundStyle(RallyTheme.rallyLime)
-                            }
-                            Button("+ Tile") { store.multiView.add(candidate: cand) }
-                                .font(.caption)
-                                .disabled(!store.multiView.canAdd)
-                            if cand.id == state.primary?.id {
-                                Image(systemName: "play.fill").foregroundStyle(RallyTheme.rallyCyan)
-                            }
+                if state.isLoading && state.candidates.isEmpty {
+                    VStack(spacing: 8) {
+                        ProgressView("Finding sources…")
+                        ForEach(state.trace.suffix(3), id: \.self) { line in
+                            Text(line).font(.caption2).foregroundStyle(RallyTheme.textTertiary)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .padding()
+                } else if !state.isLoading && state.candidates.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(state.error ?? "No playable sources found")
+                            .font(.callout).foregroundStyle(RallyTheme.liveRed)
+                        Text("Check addon URLs and the IPTV provider in Settings, then retry.")
+                            .font(.caption).foregroundStyle(RallyTheme.textSecondary)
+                        HStack {
+                            Button("Retry") {
+                                if let d = drawable { Task { await state.retry(store: store, drawable: d) } }
+                            }
+                            Button("Open Settings") { store.show(.settings) }
+                        }
+                    }
+                    .padding()
+                } else {
+                    List(state.candidates) { cand in
+                        Button {
+                            if let d = drawable { Task { await state.switchTo(cand, store: store, drawable: d) } }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(cand.title).font(.callout).lineLimit(2)
+                                    if let addon = cand.addonName {
+                                        Text(addon).font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                                    }
+                                    if let note = state.candidateNote[cand.id] {
+                                        Text(note).font(.caption2).foregroundStyle(RallyTheme.textSecondary)
+                                    }
+                                }
+                                if cand.exactMatch {
+                                    Text("MATCH").font(.caption2.bold()).foregroundStyle(RallyTheme.rallyLime)
+                                }
+                                Button("+ Tile") { store.multiView.add(candidate: cand) }
+                                    .font(.caption)
+                                    .disabled(!store.multiView.canAdd)
+                                if cand.id == state.primary?.id {
+                                    Image(systemName: "play.fill").foregroundStyle(RallyTheme.rallyCyan)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .frame(minWidth: 240, maxWidth: 340)
@@ -186,9 +246,7 @@ struct PlayerView: View {
         .navigationTitle(event?.name ?? channel?.name ?? "Player")
         .toolbar {
             Button("Multi-View (\(store.multiView.tiles.count))") {
-                store.selectedEvent = nil
-                store.selectedChannel = nil
-                store.showingMultiView = true
+                store.show(.multiView)
             }
         }
     }
