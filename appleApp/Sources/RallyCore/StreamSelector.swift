@@ -28,12 +28,16 @@ public enum StreamSelector {
         return homeOk && awayOk
     }
 
-    /// 1:1 with `qualityRank` — higher wins: 4K > 1080p > 720p > HD > unknown, HDR +60fps break ties.
+    /// 1:1 with `qualityRank` in SelectBestStreamUseCase.kt — higher wins:
+    /// 4K(700) > 1080p(500) > 720p/HD(300) > unknown(100), HDR +60, 60fps +30.
     public static func qualityRank(_ q: StreamQualityInfo) -> Int {
-        var rank = switch q.resolution { case "4K": 400; case "1080p": 300; case "720p": 200; case "HD": 100; default: 0 }
-        if q.isHdr { rank += 15 }
-        if q.is60Fps { rank += 5 }
-        if q.fps == "50 fps" { rank += 4 }
+        let base: Int
+        if q.is4K { base = 700 } else {
+            base = switch q.resolution { case "1080p": 500; case "720p", "HD": 300; default: 100 }
+        }
+        var rank = base
+        if q.isHdr { rank += 60 }
+        if q.is60Fps { rank += 30 }
         return rank
     }
 

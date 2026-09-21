@@ -166,9 +166,10 @@ final class RallyDesktopTests: XCTestCase {
             StremioStreamOption(title: "Watch here", streamUrl: "http://x/page.html", isDirectPlayable: false),
         ]
         let cands = StreamResolver.candidates(event: event, channels: [], stremioOptions: opts)
-        // HTML watch page filtered; exact 720p outranks non-exact 4K.
-        XCTAssertEqual(cands.map { $0.url }, ["http://x/720", "http://x/4k"])
-        XCTAssertTrue(cands[0].exactMatch)
+        // HTML watch page filtered; addon results are event-scoped so both
+        // options are exact and quality decides (Android `toCandidate`).
+        XCTAssertEqual(cands.map { $0.url }, ["http://x/4k", "http://x/720"])
+        XCTAssertTrue(cands.allSatisfy(\.exactMatch))
     }
 
     func testResolverIptvGuideMatch() {
@@ -213,6 +214,7 @@ final class RallyDesktopTests: XCTestCase {
         """
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.result = nil
         StubURLProtocol.body = json.data(using: .utf8)
         let client = EspnClient(session: URLSession(configuration: config))
         let detail = await client.fetchSummary(sport: "football", league: "nfl", eventId: "e1")
@@ -226,11 +228,20 @@ final class RallyDesktopTests: XCTestCase {
     }
 }
 
-private final class StubURLProtocol: URLProtocol {
+final class StubURLProtocol: URLProtocol {
     static var body: Data?
+    static var result: ((URLRequest) -> (status: Int, headers: [String: String], body: Data?))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let result = Self.result?(request) {
+            let res = HTTPURLResponse(url: request.url!, statusCode: result.status,
+                                      httpVersion: "HTTP/1.1", headerFields: result.headers)!
+            client?.urlProtocol(self, didReceive: res, cacheStoragePolicy: .notAllowed)
+            if let body = result.body { client?.urlProtocol(self, didLoad: body) }
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         let res = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: res, cacheStoragePolicy: .notAllowed)
         if let body = Self.body { client?.urlProtocol(self, didLoad: body) }

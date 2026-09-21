@@ -112,7 +112,10 @@ public final class VlcEngine: @unchecked Sendable {
         return (fraction, String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60))
     }
 
-    /// Forwards only what libVLC honors: User-Agent and Referer.
+    /// Forwards what libVLC honors: User-Agent and Referer. libVLC exposes no
+    /// media option that injects Cookie/Authorization request headers, so
+    /// header-gated streams need the AVPlayer route (`PlaybackController`,
+    /// which sends full header fields) — tracked follow-up, not this slice.
     func vlcOptions(from headers: [String: String]?) -> [String: String] {
         guard let headers else { return [:] }
         var out: [String: String] = [:]

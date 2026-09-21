@@ -78,6 +78,7 @@ final class PlayerState: ObservableObject {
         }
         candidates = cands
         log("candidates=\(cands.count) stremio=\(cands.filter { $0.kind == .stremio }.count) iptv=\(cands.filter { $0.kind == .iptv }.count)")
+        await preflightTopCandidates(store: store)
         if let event, let path = EspnClient.path(forLeague: event.league) {
             detailLoading = true
             Task {
@@ -90,13 +91,38 @@ final class PlayerState: ObservableObject {
                 log("detail leaders=\(detail.leaders.count) clips=\(detail.clips.count)")
             }
         }
-        guard let first = cands.first else {
+        guard !candidates.isEmpty else {
             error = "No playable sources found"
             log("empty: check addon URLs and IPTV provider in Settings")
             return
         }
-        await play(first, store: store, drawable: drawable)
+        // Autoplay the verified exact match; fall back to top rank when
+        // nothing verified yet (desktop keeps v1 autoplay).
+        await play(StreamResolver.primary(from: candidates) ?? candidates[0], store: store, drawable: drawable)
     }
+
+    /// Probes the top-5 Stremio candidates by rank (Android `SelectBestStreamUseCase`).
+    /// Verified rows sort up; failed rows are labeled so playback skips dead URLs.
+    private func preflightTopCandidates(store: RallyStore) async {
+        let settings = store.settings
+        let targets = candidates.filter { $0.kind == .stremio }
+            .sorted { $0.rank > $1.rank }.prefix(5)
+        await withTaskGroup(of: (String, StreamPreflightResult).self) { group in
+            for cand in targets {
+                group.addTask { (cand.id, await StreamPreflightProbe.shared.probe(url: cand.url, headers: cand.headers ?? [:])) }
+            }
+            for await (id, result) in group {
+                if let i = candidates.firstIndex(where: { $0.id == id }) {
+                    candidates[i].preflightPassed = result.passed
+                    candidates[i].preflightLatencyMs = result.latencyMs
+                    candidates[i].preflightContentType = result.contentType
+                    candidateNote[id] = result.passed ? "Verified \(result.latencyMs) ms" : "Unreachable: \(result.detail)"
+                }
+            }
+        }
+        candidates = StreamResolver.sort(candidates) { settings.streamHealth(target: $0).score }
+    }
+
     func switchTo(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
         await play(candidate, store: store, drawable: drawable)
     }
@@ -165,8 +191,9 @@ final class PlayerState: ObservableObject {
         startedAt = Date()
         do {
             _ = engine.reserve(slotId: slotId)
+            let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers ?? channelHeaders(store, candidate))
             try engine.play(slotId: slotId, title: candidate.title, url: url,
-                            headers: candidate.headers ?? channelHeaders(store, candidate), drawable: drawable)
+                            headers: safeHeaders.isEmpty ? nil : safeHeaders, drawable: drawable)
             primary = candidate
             isPlaying = true
             candidateNote[candidate.id] = "Playing"
@@ -185,8 +212,11 @@ final class PlayerState: ObservableObject {
         guard candidate.kind == .iptv else { return nil }
         if store.settings.iptvProvider == .stalker {
             let mac = store.settings.macAddress
-            return ["User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"]
-                .merging(mac.isEmpty ? [:] : ["Cookie": "mac=\(mac); stb_lang=en; timezone=GMT"]) { a, _ in a }
+            var headers = ["User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"]
+            if !mac.isEmpty { headers["Cookie"] = "mac=\(mac); stb_lang=en; timezone=GMT" }
+            let token = store.settings.authToken
+            if !token.isEmpty { headers["Authorization"] = StreamRequestHeaders.normalizedBearerToken(token) }
+            return headers
         }
         return nil
     }
