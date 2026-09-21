@@ -41,7 +41,6 @@ extension View {
 enum TvDestination: Hashable {
     case home, live, leagues, highlights, myTeams
 }
-
 // MARK: - Top bar (mirrors RallyTopBar)
 
 struct RallyTopBar: View {
@@ -58,23 +57,23 @@ struct RallyTopBar: View {
                     Image(nsImage: img)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 220, height: 44, alignment: .leading)
+                        .frame(width: 240, height: 48, alignment: .leading)
                 } else {
-                    Text("rally").font(.system(size: 40, weight: .black, design: .rounded))
+                    Text("rally").font(.system(size: 46, weight: .black, design: .rounded))
                         .foregroundStyle(RallyTheme.rallyLime)
                 }
                 Spacer()
                 HStack(spacing: 12) {
                     Button(action: onSearch) {
-                        Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .medium))
+                        Image(systemName: "magnifyingglass").font(.system(size: 22, weight: .medium))
                             .foregroundStyle(RallyTheme.textPrimary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 52, height: 52)
                             .rallyGlass(Circle())
                     }.buttonStyle(.plain)
                     Button(action: onSettings) {
-                        Image(systemName: "gearshape").font(.system(size: 20, weight: .medium))
+                        Image(systemName: "gearshape").font(.system(size: 22, weight: .medium))
                             .foregroundStyle(RallyTheme.textPrimary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 52, height: 52)
                             .rallyGlass(Circle())
                     }.buttonStyle(.plain)
                 }
@@ -94,28 +93,36 @@ struct RallyTopBar: View {
         .padding(.top, 8)
     }
 
+    @Namespace private var capsuleMotion
+
     private func capsuleItem(icon: String, label: String, dest: TvDestination, dot: Bool) -> some View {
         let selected = destination == dest
         return Button { destination = dest } label: {
             VStack(spacing: 4) {
                 ZStack {
                     Image(systemName: icon)
-                        .font(.system(size: 22, weight: selected ? .semibold : .regular))
+                        .font(.system(size: 18, weight: selected ? .semibold : .regular))
                         .foregroundStyle(selected ? RallyTheme.textPrimary : RallyTheme.textSecondary)
+                        .scaleEffect(selected ? 1.12 : 1.0)
                     if dot {
-                        Circle().fill(RallyTheme.liveRed).frame(width: 7, height: 7)
-                            .offset(x: 14, y: -10)
+                        Circle().fill(RallyTheme.liveRed).frame(width: 6, height: 6)
+                            .offset(x: 12, y: -9)
                     }
                 }
-                .frame(height: 26)
-                Text(label).font(.system(size: 11, weight: selected ? .semibold : .medium))
+                .frame(height: 22)
+                Text(label).font(.system(size: 10, weight: selected ? .semibold : .medium))
                     .foregroundStyle(selected ? RallyTheme.textPrimary : RallyTheme.textSecondary)
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
-            .frame(width: 84)
-            .padding(.vertical, 6)
-            .background(selected ? Color.white.opacity(0.14) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .frame(width: 68)
+            .padding(.vertical, 4)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.white.opacity(0.14))
+                        .matchedGeometryEffect(id: "capsule-selection", in: capsuleMotion)
+                }
+            }
         }
         .buttonStyle(.plain)
     }
@@ -129,10 +136,12 @@ extension RallyStore {
     var liveEvents: [SportEvent] {
         events.filter { $0.status == .live || $0.status == .halftime }
     }
+
     var upcomingEvents: [SportEvent] {
         let cutoff = Date().addingTimeInterval(-3600)
         return events.filter { $0.status == .notStarted && $0.startTime > cutoff }
     }
+
     var featuredEvent: SportEvent? {
         liveEvents.first ?? upcomingEvents.first ?? events.first
     }
