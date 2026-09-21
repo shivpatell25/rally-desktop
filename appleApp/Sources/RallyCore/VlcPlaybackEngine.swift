@@ -77,6 +77,30 @@ public final class VlcEngine: @unchecked Sendable {
         lock.withLock { players[slotId] }?.stop()
     }
 
+    @MainActor
+    public func pause(slotId: String) {
+        lock.withLock { players[slotId] }?.pause()
+    }
+
+    @MainActor
+    public func resume(slotId: String) {
+        lock.withLock { players[slotId] }?.play()
+    }
+
+    @MainActor
+    public func isPlaying(slotId: String) -> Bool {
+        lock.withLock { players[slotId] }?.isPlaying ?? false
+    }
+    /// Fraction 0-1 plus clock string for transport display.
+    @MainActor
+    public func position(slotId: String) -> (fraction: Double, clock: String)? {
+        guard let player = lock.withLock({ players[slotId] }) else { return nil }
+        let fraction = player.position
+        let ms = player.time.intValue
+        let s = max(0, ms / 1000)
+        return (fraction, String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60))
+    }
+
     /// Forwards only what libVLC honors: User-Agent and Referer.
     func vlcOptions(from headers: [String: String]?) -> [String: String] {
         guard let headers else { return [:] }

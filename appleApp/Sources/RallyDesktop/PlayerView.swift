@@ -22,12 +22,13 @@ final class PlayerState: ObservableObject {
     @Published var primary: PlayCandidate?
     @Published var isLoading = true
     @Published var error: String?
-    @Published var isPlaying = false
-    /// Per-candidate status shown in the picker (resolving / ready / failure reason).
     @Published var candidateNote: [String: String] = [:]
-    /// Ring buffer of load trace lines, mirrored to Console (no URLs with credentials).
     @Published var trace: [String] = []
-
+    @Published var isPlaying = false
+    @Published var paused = false
+    @Published var positionText = "0:00:00"
+    @Published var positionFraction: Double = 0
+    @Published var showDiagnostics = false
     let engine = VlcEngine()
     private let slotId = UUID().uuidString
     private var startedAt = Date()
@@ -142,9 +143,29 @@ final class PlayerState: ObservableObject {
         return nil
     }
 
+    func togglePause() {
+        if paused {
+            engine.resume(slotId: slotId)
+            paused = false
+        } else {
+            engine.pause(slotId: slotId)
+            paused = true
+        }
+        log(paused ? "paused" : "resumed")
+    }
+
+    func refreshStats() {
+        if let pos = engine.position(slotId: slotId) {
+            positionFraction = pos.fraction
+            positionText = pos.clock
+        }
+        paused = !engine.isPlaying(slotId: slotId) && isPlaying
+    }
+
     func teardown() {
         engine.release(slotId: slotId)
         isPlaying = false
+        paused = false
     }
 }
 
@@ -168,22 +189,43 @@ struct PlayerView: View {
                 }
                 .frame(minWidth: 480, minHeight: 270)
                 .background(Color.black)
-                HStack {
+                HStack(spacing: 10) {
                     if state.isLoading { ProgressView().scaleEffect(0.7) }
+                    Button(state.paused ? "▶" : "❚❚") { state.togglePause() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(RallyTheme.textPrimary)
+                        .disabled(!state.isPlaying)
+                        .keyboardShortcut(.space, modifiers: [])
                     if let err = state.error {
-                        Text(err).font(.caption).foregroundStyle(RallyTheme.liveRed)
+                        Text(err).font(.caption).foregroundStyle(RallyTheme.liveRed).lineLimit(1)
                         Button("Retry") {
                             if let d = drawable { Task { await state.retry(store: store, drawable: d) } }
                         }
                     } else if let p = state.primary {
                         Text(p.title).font(.caption).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                         Spacer()
+                        Text(state.positionText).font(.caption.monospacedDigit())
+                            .foregroundStyle(RallyTheme.textSecondary)
                         Text(p.kind == .stremio ? "Stremio" : "IPTV").font(.caption2.bold())
                             .foregroundStyle(RallyTheme.rallyCyan)
                     }
                     Spacer()
+                    Button(state.showDiagnostics ? "Hide stats" : "Stats") {
+                        state.showDiagnostics.toggle()
+                    }
+                    .font(.caption)
                 }
                 .padding(8)
+                if state.showDiagnostics {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(state.trace.suffix(6), id: \.self) { line in
+                            Text(line).font(.caption2.monospaced())
+                                .foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
+                        }
+                    }
+                    .padding([.horizontal, .bottom], 8)
+                }
             }
             .frame(minWidth: 500)
             VStack(alignment: .leading) {
@@ -249,6 +291,13 @@ struct PlayerView: View {
                 store.show(.multiView)
             }
         }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                state.refreshStats()
+            }
+        }
+        .onDisappear { state.teardown() }
     }
 }
 
