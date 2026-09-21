@@ -7,6 +7,8 @@ struct TvEventDetail: View {
     var event: SportEvent
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
+    @State private var teamStats: [TeamStatComparison] = []
+    @State private var leaders: [PlayerLeader] = []
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
@@ -20,6 +22,16 @@ struct TvEventDetail: View {
             .padding(.horizontal, m.hPad).padding(.vertical, 12)
         }
         .background { AmbientBackground() }
+        .task { await loadDetail() }
+    }
+
+    private func loadDetail() async {
+        guard let path = EspnClient.path(forLeague: event.league) else { return }
+        let detail = await store.espnClient.fetchSummary(
+            sport: path.sport, league: path.path, eventId: event.id,
+            awayAbbr: event.awayTeam?.abbreviation, homeAbbr: event.homeTeam?.abbreviation)
+        teamStats = detail.teamStats
+        leaders = detail.leaders
     }
 
     private var isLive: Bool { event.status == .live || event.status == .halftime }
@@ -143,6 +155,9 @@ struct TvEventDetail: View {
         panel(title: isLive ? "LIVE STATS" : event.status == .notStarted ? "MATCHUP PREVIEW" : "MATCHUP STATS", trailing: nil) {
             matchupRow(away: event.awayTeam, home: event.homeTeam, label: "TEAMS")
             matchupRowText(away: recordSummary(event.awayTeam), home: recordSummary(event.homeTeam), label: "RECORD")
+            ForEach(teamStats.prefix(4), id: \.label) { stat in
+                matchupRowText(away: stat.awayValue, home: stat.homeValue, label: stat.label.uppercased())
+            }
             matchupRowText(away: event.scoreAway.map(String.init), home: event.scoreHome.map(String.init), label: "SCORE")
         }
     }
@@ -211,6 +226,13 @@ struct TvEventDetail: View {
                 .frame(width: 90, alignment: .trailing).lineLimit(1)
         }
         .frame(height: 30)
+    }
+
+    private func teamLeaders(_ team: Team?) -> [PlayerLeader] {
+        guard let team else { return [] }
+        return leaders.filter {
+            $0.teamAbbr?.caseInsensitiveCompare(team.abbreviation) == .orderedSame
+        }.prefix(2).map { $0 }
     }
 
     private func outlookColumn(team: Team?) -> some View {

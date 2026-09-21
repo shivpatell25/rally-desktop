@@ -312,7 +312,7 @@ struct PlayerView: View {
 
     // MARK: HUD top (mirrors PlaybackHud header)
 
-    private var hudTop: some View {
+    var hudTop: some View {
         HStack {
             playerButton("‹ Back") { store.show(nil) }
             Spacer()
@@ -328,7 +328,7 @@ struct PlayerView: View {
 
     // MARK: HUD bottom (mirrors PlaybackHud footer)
 
-    private var hudBottom: some View {
+    var hudBottom: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let event {
                 HStack(spacing: 7) {
@@ -401,7 +401,7 @@ struct PlayerView: View {
         .buttonStyle(.plain)
     }
 
-    private func toggleFullscreen() {
+    func toggleFullscreen() {
         NSApp.keyWindow?.toggleFullScreen(nil)
     }
 

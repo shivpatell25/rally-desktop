@@ -299,87 +299,25 @@ extension PlayerView {
             VideoHost(host: host)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(Color.black)
-            LinearGradient(colors: [Color.black.opacity(0.55), .clear, .clear, Color.black.opacity(0.75)],
-                           startPoint: .top, endPoint: .bottom)
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    HStack(spacing: 5) {
-                        Circle().fill(RallyTheme.liveRed).frame(width: 7, height: 7)
-                        Text("LIVE").font(.system(size: 12, weight: .bold)).tracking(0.8).foregroundStyle(.white)
-                    }
-                    if let mark = Artwork.leagueMark(league: event?.league ?? ""), let img = tvArt(mark) {
-                        Image(nsImage: img).resizable().aspectRatio(contentMode: .fit).frame(height: 20)
-                    }
-                    Text(Artwork.displayLeague(event?.league).uppercased())
-                        .font(.system(size: 12, weight: .semibold)).tracking(1)
-                        .foregroundStyle(RallyTheme.textSecondary)
+            if controlsVisible {
+                VStack(spacing: 0) {
+                    hudTop
                     Spacer()
-                }
-                .padding(.horizontal, 18).padding(.top, 14)
-                Spacer()
-                if state.paused {
-                    Button { state.togglePause() } label: {
-                        ZStack {
-                            Circle().fill(Color.black.opacity(0.55)).frame(width: 76, height: 76)
-                            Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.white)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                }
-                VStack(spacing: 8) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.white.opacity(0.25)).frame(height: 4)
-                            Capsule().fill(RallyTheme.liveRed)
-                                .frame(width: max(0, geo.size.width * progressFraction), height: 4)
-                        }
-                    }
-                    .frame(height: 4)
-                    .padding(.horizontal, 18)
-                    HStack(spacing: 14) {
-                        Button(state.paused ? "▶" : "❚❚") { state.togglePause() }
-                            .buttonStyle(.plain).font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white).keyboardShortcut(.space, modifiers: [])
-                        Button { state.toggleMute() } label: {
-                            Image(systemName: state.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 14)).foregroundStyle(.white)
-                        }
-                        .buttonStyle(.plain)
-                        HStack(spacing: 5) {
-                            Circle().fill(RallyTheme.liveRed).frame(width: 6, height: 6)
-                            Text("LIVE").font(.system(size: 11, weight: .bold)).foregroundStyle(RallyTheme.liveRed)
-                        }
-                        Spacer()
-                        Text(clockLine).font(.system(size: 12).monospacedDigit()).foregroundStyle(.white)
-                        Button("CC") {}
-                            .buttonStyle(.plain).font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.35))
-                            .disabled(true)
-                        Button { diagVisible.toggle() } label: {
-                            Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(.white)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 18).padding(.bottom, 12)
+                    hudBottom
                 }
             }
-            if diagVisible { diagnosticsPanel }
+            if state.paused {
+                Button { state.togglePause() } label: {
+                    ZStack {
+                        Circle().fill(Color.black.opacity(0.55)).frame(width: 76, height: 76)
+                        Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.white)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
-    }
-
-    private var progressFraction: Double {
-        if state.positionFraction > 0 { return min(1, state.positionFraction) }
-        return state.isPlaying ? 1 : 0
-    }
-
-    private var clockLine: String {
-        if let event, event.status == .live || event.status == .halftime {
-            return "\(event.gameStatusDetail ?? state.positionText) / Live"
-        }
-        return state.positionText
     }
 
     private func switchEvent(_ new: SportEvent) {
