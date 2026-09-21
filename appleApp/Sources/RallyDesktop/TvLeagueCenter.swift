@@ -303,12 +303,13 @@ struct TvDirectoryCard: View {
                     HStack {
                         Text("LEAGUE CENTER").font(.system(size: 9, weight: .bold)).tracking(0.8)
                             .foregroundStyle(RallyTheme.textSecondary)
-                        Spacer()
+                        Spacer(minLength: 8)
                         if hasLive {
                             Text("● LIVE").font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(RallyTheme.liveRed)
                         }
                     }
+                    .frame(width: (size ?? CGSize(width: 220, height: 220)).width - 30)
                     Spacer()
                     if let mark = Artwork.leagueMark(league: title), let img = tvArt(mark) {
                         Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)

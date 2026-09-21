@@ -705,20 +705,30 @@ struct TvMyTeams: View {
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
     var body: some View {
-        List {
-            ForEach(settings.favoriteTeamProfiles) { team in
-                Section(team.name) {
-                    let next = store.events.filter {
-                        $0.homeTeam?.id == team.id || $0.awayTeam?.id == team.id
-                    }.prefix(5)
-                    if next.isEmpty {
-                        Text("No upcoming games").font(.caption).foregroundStyle(RallyTheme.textTertiary)
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                ForEach(settings.favoriteTeamProfiles) { team in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(team.name.uppercased()).font(.system(size: 13, weight: .bold)).tracking(1.4)
+                            .foregroundStyle(.white)
+                        let next = store.events.filter {
+                            $0.homeTeam?.id == team.id || $0.awayTeam?.id == team.id
+                        }.prefix(5)
+                        if next.isEmpty {
+                            Text("No upcoming games").font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                        }
+                        ForEach(Array(next)) { event in
+                            GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
+                        }
                     }
-                    ForEach(Array(next)) { event in
-                        GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
-                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
                 }
             }
+            .padding(.horizontal, m.hPad).padding(.vertical, 14)
         }
         .background { AmbientBackground() }
         .overlay {
