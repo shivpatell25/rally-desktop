@@ -134,6 +134,9 @@ enum LaunchArgs {
     static var gameMode: Bool {
         CommandLine.arguments.contains("--game")
     }
+    static var openSettings: Bool {
+        CommandLine.arguments.contains("--settings")
+    }
     static var playId: String? {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--play=") }) else { return nil }
         let id = String(arg.dropFirst(7))
@@ -189,6 +192,7 @@ struct ContentView: View {
             await store.refresh()
             await store.checkUpdates()
             if let league = LaunchArgs.league { store.pendingLeague = league }
+            if LaunchArgs.openSettings { store.show(.settings) }
             if let id = LaunchArgs.eventId {
                 if let e = store.events.first(where: { $0.id == id }) { store.show(.eventDetail(e)) }
                 else if let e = store.featuredEvent { store.show(.eventDetail(e)) }
