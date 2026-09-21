@@ -17,6 +17,24 @@ extension View {
             self.background(RallyTheme.glassSurface).clipShape(shape)
         }
     }
+
+    /// Floating capsule bar: interactive glass, edge light, drop shadow.
+    @ViewBuilder
+    func rallyCapsule() -> some View {
+        if #available(macOS 26, *) {
+            self.glassEffect(.regular.interactive(), in: Capsule())
+                .overlay(Capsule().stroke(
+                    LinearGradient(colors: [Color.white.opacity(0.45), Color.white.opacity(0.08)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                    lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.4), radius: 24, y: 12)
+        } else {
+            self.background(RallyTheme.glassSurface)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(RallyTheme.glassBorder, lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.4), radius: 24, y: 12)
+        }
+    }
 }
 // MARK: - Destinations (mirrors RallyDestination)
 
@@ -33,63 +51,71 @@ struct RallyTopBar: View {
     var onSearch: () -> Void = {}
     var onSettings: () -> Void = {}
     var body: some View {
-        HStack(spacing: 0) {
-            if let url = Artwork.artURL("rally_wordmark"),
-               let img = NSImage(contentsOf: url) {
-                Image(nsImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 200, height: 40, alignment: .leading)
-            } else {
-                Text("rally").font(.system(size: 38, weight: .black, design: .rounded))
-                    .foregroundStyle(RallyTheme.rallyLime)
+        VStack(spacing: 10) {
+            HStack(spacing: 0) {
+                if let url = Artwork.artURL("rally_wordmark"),
+                   let img = NSImage(contentsOf: url) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 220, height: 44, alignment: .leading)
+                } else {
+                    Text("rally").font(.system(size: 40, weight: .black, design: .rounded))
+                        .foregroundStyle(RallyTheme.rallyLime)
+                }
+                Spacer()
+                HStack(spacing: 12) {
+                    Button(action: onSearch) {
+                        Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(RallyTheme.textPrimary)
+                            .frame(width: 44, height: 44)
+                            .rallyGlass(Circle())
+                    }.buttonStyle(.plain)
+                    Button(action: onSettings) {
+                        Image(systemName: "gearshape").font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(RallyTheme.textPrimary)
+                            .frame(width: 44, height: 44)
+                            .rallyGlass(Circle())
+                    }.buttonStyle(.plain)
+                }
+                .padding(.trailing, 6)
             }
-            Spacer()
-            HStack(spacing: 2) {
-                topNavItem("HOME", .home)
-                topNavItem("LIVE", .live, dot: true)
-                topNavItem("LEAGUES", .leagues)
-                topNavItem("HIGHLIGHTS", .highlights)
-                topNavItem("MY TEAMS", .myTeams)
+            .padding(.horizontal, m.hPad)
+            HStack(spacing: 4) {
+                capsuleItem(icon: "house.fill", label: "Home", dest: .home, dot: false)
+                capsuleItem(icon: "dot.radiowaves.left.and.right", label: "Live", dest: .live, dot: true)
+                capsuleItem(icon: "square.grid.2x2.fill", label: "Leagues", dest: .leagues, dot: false)
+                capsuleItem(icon: "play.rectangle.fill", label: "Highlights", dest: .highlights, dot: false)
+                capsuleItem(icon: "star.fill", label: "My Teams", dest: .myTeams, dot: false)
             }
-            .padding(6)
-            .rallyGlass(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(RallyTheme.glassBorder, lineWidth: 1))
-            Spacer()
-            HStack(spacing: 12) {
-                Button(action: onSearch) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(RallyTheme.textPrimary)
-                        .frame(width: 44, height: 44)
-                        .rallyGlass(Circle())
-                }.buttonStyle(.plain)
-                Button(action: onSettings) {
-                    Image(systemName: "gearshape").font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(RallyTheme.textPrimary)
-                        .frame(width: 44, height: 44)
-                        .rallyGlass(Circle())
-                }.buttonStyle(.plain)
-            }
-            .padding(.trailing, 6)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .rallyCapsule()
         }
-        .padding(.horizontal, m.hPad)
-        .frame(height: m.s(88))
+        .padding(.top, 8)
     }
-    private func topNavItem(_ label: String, _ dest: TvDestination, dot: Bool = false) -> some View {
-        Button {
-            if dest == .home || dest == .live || dest == .leagues || dest == .highlights || dest == .myTeams {
-                destination = dest
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if dot { Circle().fill(RallyTheme.liveRed).frame(width: 6, height: 6) }
-                Text(label).font(.system(size: 13, weight: .semibold)).tracking(1)
-                    .foregroundStyle(destination == dest ? RallyTheme.textPrimary : RallyTheme.textSecondary)
+
+    private func capsuleItem(icon: String, label: String, dest: TvDestination, dot: Bool) -> some View {
+        let selected = destination == dest
+        return Button { destination = dest } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 22, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? RallyTheme.textPrimary : RallyTheme.textSecondary)
+                    if dot {
+                        Circle().fill(RallyTheme.liveRed).frame(width: 7, height: 7)
+                            .offset(x: 14, y: -10)
+                    }
+                }
+                .frame(height: 26)
+                Text(label).font(.system(size: 11, weight: selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? RallyTheme.textPrimary : RallyTheme.textSecondary)
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 18).padding(.vertical, 10)
-            .background(destination == dest ? RallyTheme.surfaceFocused : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(width: 84)
+            .padding(.vertical, 6)
+            .background(selected ? Color.white.opacity(0.14) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
     }
