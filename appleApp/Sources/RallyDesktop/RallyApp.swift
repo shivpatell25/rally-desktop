@@ -58,6 +58,7 @@ final class RallyStore: ObservableObject {
     func show(_ sheet: AppSheet?) { self.sheet = sheet }
 
     var stremioClient: StremioClient { stremio }
+    var espnClient: EspnClient { espn }
     var stalkerClient: StalkerClient { providers().0 }
     var xtreamClient: XtreamClient { providers().1 }
     private let stremio = StremioClient()
@@ -130,6 +131,9 @@ enum LaunchArgs {
         let id = String(arg.dropFirst(8))
         return id.isEmpty ? nil : id
     }
+    static var gameMode: Bool {
+        CommandLine.arguments.contains("--game")
+    }
     static var playId: String? {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--play=") }) else { return nil }
         let id = String(arg.dropFirst(7))
@@ -147,22 +151,31 @@ struct ContentView: View {
     }
     var body: some View {
         GeometryReader { geo in
-            VStack(spacing: 0) {
-                RallyTopBar(destination: $destination,
-                            onSearch: { store.show(.search) },
-                            onSettings: { store.show(.settings) })
-                Group {
-                    switch destination {
-                    case .home: TvHomeDashboard(destination: $destination)
-                    case .live: TvLiveRow()
-                    case .leagues: TvLeaguesHome()
-                    case .highlights: TvHighlights()
-                    case .myTeams: TvMyTeams()
+            ZStack {
+                VStack(spacing: 0) {
+                    RallyTopBar(destination: $destination,
+                                onSearch: { store.show(.search) },
+                                onSettings: { store.show(.settings) })
+                    Group {
+                        switch destination {
+                        case .home: TvHomeDashboard(destination: $destination)
+                        case .live: TvLiveRow()
+                        case .leagues: TvLeaguesHome()
+                        case .highlights: TvHighlights()
+                        case .myTeams: TvMyTeams()
+                        }
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: slideEdge).combined(with: .opacity),
+                        removal: .move(edge: slideEdge == .trailing ? .leading : .trailing).combined(with: .opacity)))
                 }
-                .transition(.asymmetric(
-                    insertion: .move(edge: slideEdge).combined(with: .opacity),
-                    removal: .move(edge: slideEdge == .trailing ? .leading : .trailing).combined(with: .opacity)))
+                // Fullscreen takeover: the player covers chrome and content.
+                if case .player(let event, let channel) = store.sheet {
+                    PlayerView(event: event, channel: channel)
+                        .environmentObject(store)
+                        .environmentObject(store.settings)
+                        .transition(.opacity)
+                }
             }
             .environment(\.tvMetrics, TvMetrics(width: geo.size.width))
         }
@@ -184,13 +197,20 @@ struct ContentView: View {
                 else if let e = store.featuredEvent { store.show(.player(event: e, channel: nil)) }
             }
         }
-        .sheet(item: $store.sheet) { sheet in
+        .sheet(item: Binding<AppSheet?>(
+            get: {
+                guard let s = store.sheet else { return nil }
+                if case .player = s { return nil } // fullscreen branch owns player
+                return s
+            },
+            set: { store.sheet = $0 }
+        )) { sheet in
             Group {
                 switch sheet {
                 case .eventDetail(let event):
                     TvEventDetail(event: event).frame(minWidth: 1000, minHeight: 700)
-                case .player(let event, let channel):
-                    PlayerView(event: event, channel: channel).frame(minWidth: 900, minHeight: 600)
+                case .player:
+                    EmptyView()
                 case .multiView:
                     MultiViewView(state: store.multiView).frame(minWidth: 900, minHeight: 600)
                 case .search:

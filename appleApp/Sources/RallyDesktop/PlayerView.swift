@@ -16,6 +16,13 @@ struct VLCVideoView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// Displays a caller-owned NSView so one drawable survives relayouts.
+struct VideoHost: NSViewRepresentable {
+    var host: NSView
+    func makeNSView(context: Context) -> NSView { host }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 @MainActor
 final class PlayerState: ObservableObject {
     @Published var candidates: [PlayCandidate] = []
@@ -42,6 +49,7 @@ final class PlayerState: ObservableObject {
         if trace.count > 30 { trace.removeFirst(trace.count - 30) }
         NSLog("%@", stamped)
     }
+
     func load(event: SportEvent?, channel: IptvChannel?, store: RallyStore, drawable: NSView) async {
         isLoading = true
         error = nil
@@ -67,6 +75,16 @@ final class PlayerState: ObservableObject {
         }
         candidates = cands
         log("candidates=\(cands.count) stremio=\(cands.filter { $0.kind == .stremio }.count) iptv=\(cands.filter { $0.kind == .iptv }.count)")
+        if let event, let path = EspnClient.path(forLeague: event.league) {
+            detailLoading = true
+            Task {
+                let detail = await store.espnClient.fetchSummary(sport: path.sport, league: path.path, eventId: event.id)
+                leaders = detail.leaders
+                clips = detail.clips
+                detailLoading = false
+                log("detail leaders=\(detail.leaders.count) clips=\(detail.clips.count)")
+            }
+        }
         guard let first = cands.first else {
             error = "No playable sources found"
             log("empty: check addon URLs and IPTV provider in Settings")
@@ -74,9 +92,19 @@ final class PlayerState: ObservableObject {
         }
         await play(first, store: store, drawable: drawable)
     }
-
     func switchTo(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
         await play(candidate, store: store, drawable: drawable)
+    }
+
+    /// Plays an ESPN highlight clip as a one-off Stremio-kind candidate.
+    func playClip(_ clip: HighlightClip, store: RallyStore, drawable: NSView) async {
+        guard let url = clip.streamUrl, !url.isEmpty else {
+            error = "Highlight has no playable stream"
+            return
+        }
+        await play(PlayCandidate(title: clip.title, url: url, kind: .stremio,
+                                 exactMatch: true, rank: 0, addonName: "ESPN"),
+                   store: store, drawable: drawable)
     }
 
     /// Retry walks every candidate in rank order until one plays (v1 fallback chain).
@@ -174,12 +202,15 @@ final class PlayerState: ObservableObject {
 
 struct PlayerView: View {
     @EnvironmentObject var store: RallyStore
-    @StateObject private var state = PlayerState()
-    @State private var drawable: NSView?
+    @StateObject var state = PlayerState()
+    @State var host = NSView()
     @State private var started = false
     @State private var controlsVisible = true
     @State private var pickerVisible = false
-    @State private var gameViewVisible = false
+    @State var gameMode = false
+    @State var topTab = 0
+    @State var infoTab = 0
+    @FocusState var liveFocus: String?
     @State private var diagVisible = false
     @State private var lastMove = Date()
     @State private var mouseMonitor: Any?
@@ -187,22 +218,56 @@ struct PlayerView: View {
     let channel: IptvChannel?
 
     var body: some View {
-        ZStack {
-            VLCVideoView { view in
-                drawable = view
-                if !started {
-                    started = true
-                    Task { await state.load(event: event, channel: channel, store: store, drawable: view) }
+        Group {
+            if gameMode {
+                gameViewLayout
+            } else {
+                watchLayout
+            }
+        }
+        .onAppear { if LaunchArgs.gameMode { gameMode = true } }
+        .background(Color.black)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                state.refreshStats()
+                if state.isPlaying && !state.paused && !pickerVisible && !diagVisible
+                    && Date().timeIntervalSince(lastMove) > 6.5 {
+                    controlsVisible = false
                 }
             }
+        }
+        .onAppear {
+            host.wantsLayer = true
+            if !started {
+                started = true
+                Task { await state.load(event: event, channel: channel, store: store, drawable: host) }
+            }
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { ev in
+                lastMove = Date()
+                if state.isPlaying && !pickerVisible && !diagVisible {
+                    controlsVisible = true
+                }
+                return ev
+            }
+        }
+        .onDisappear {
+            if let m = mouseMonitor { NSEvent.removeMonitor(m) }
+            state.teardown()
+        }
+    }
+
+    private var watchLayout: some View {
+        ZStack {
+            VideoHost(host: host)
             .background(Color.black)
             .onTapGesture {
-                guard !pickerVisible && !gameViewVisible && !diagVisible else { return }
+                guard !pickerVisible && !diagVisible else { return }
                 controlsVisible.toggle()
                 lastMove = Date()
             }
             // Top + bottom scrims (mirrors PlaybackHud gradients).
-            if controlsVisible || pickerVisible || gameViewVisible || diagVisible {
+            if controlsVisible || pickerVisible || diagVisible {
                 VStack {
                     LinearGradient(colors: [Color.black.opacity(0.65), .clear],
                                    startPoint: .top, endPoint: .bottom)
@@ -220,35 +285,10 @@ struct PlayerView: View {
                 if controlsVisible { hudBottom }
             }
             if pickerVisible { pickerPanel }
-            if gameViewVisible { gameViewPanel }
             if diagVisible { diagnosticsPanel }
             if let err = state.error, state.primary == nil, !state.isLoading {
                 playbackErrorOverlay(err)
             }
-        }
-        .background(Color.black)
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                state.refreshStats()
-                if state.isPlaying && !state.paused && !pickerVisible && !gameViewVisible && !diagVisible
-                    && Date().timeIntervalSince(lastMove) > 6.5 {
-                    controlsVisible = false
-                }
-            }
-        }
-        .onAppear {
-            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { ev in
-                lastMove = Date()
-                if state.isPlaying && !pickerVisible && !gameViewVisible && !diagVisible {
-                    controlsVisible = true
-                }
-                return ev
-            }
-        }
-        .onDisappear {
-            if let m = mouseMonitor { NSEvent.removeMonitor(m) }
-            state.teardown()
         }
     }
 
@@ -306,7 +346,7 @@ struct PlayerView: View {
                     .disabled(!state.isPlaying)
                     .keyboardShortcut(.space, modifiers: [])
                 if event != nil {
-                    playerButton("Game View", primary: true) { gameViewVisible.toggle(); lastMove = Date() }
+                    playerButton("Game View", primary: true) { gameMode = true; lastMove = Date() }
                 }
                 playerButton("Sources") { pickerVisible = true; lastMove = Date() }
                 playerButton("Diagnostics") { diagVisible.toggle(); lastMove = Date() }
@@ -327,7 +367,7 @@ struct PlayerView: View {
         .padding(.horizontal, 30).padding(.bottom, 27)
     }
 
-    private func playerButton(_ label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
+    func playerButton(_ label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label).font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(primary ? Color.black : RallyTheme.textPrimary)
@@ -346,7 +386,7 @@ struct PlayerView: View {
         return "\(away) at \(home)"
     }
 
-    private func specsLine(_ p: PlayCandidate) -> String {
+    func specsLine(_ p: PlayCandidate) -> String {
         var parts: [String] = []
         let q = parseQualityFromChannelName(p.addonName ?? p.title)
         if let r = q.resolution { parts.append(r) }
@@ -362,7 +402,7 @@ struct PlayerView: View {
                 .foregroundStyle(.white).multilineTextAlignment(.center)
             HStack(spacing: 10) {
                 playerButton("Try Again", primary: true) {
-                    if let d = drawable { Task { await state.retry(store: store, drawable: d) } }
+                    Task { await state.retry(store: store, drawable: host) }
                 }
                 if !state.candidates.isEmpty {
                     playerButton("Choose Source") { pickerVisible = true }
@@ -407,7 +447,7 @@ struct PlayerView: View {
                             .font(.callout).foregroundStyle(RallyTheme.textSecondary)
                         HStack {
                             playerButton("Retry") {
-                                if let d = drawable { Task { await state.retry(store: store, drawable: d) } }
+                                Task { await state.retry(store: store, drawable: host) }
                             }
                             playerButton("Open Settings") { store.show(.settings) }
                         }
@@ -435,11 +475,9 @@ struct PlayerView: View {
 
     private func sourceCard(_ cand: PlayCandidate) -> some View {
         Button {
-            if let d = drawable {
-                Task {
-                    await state.switchTo(cand, store: store, drawable: d)
-                    pickerVisible = false
-                }
+            Task {
+                await state.switchTo(cand, store: store, drawable: host)
+                pickerVisible = false
             }
         } label: {
             HStack {
@@ -482,86 +520,6 @@ struct PlayerView: View {
         .disabled(cand.url.isEmpty)
     }
 
-    // MARK: Game view (score, records, info over video edge)
-
-    private var gameViewPanel: some View {
-        HStack {
-            Spacer()
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("GAME VIEW").font(.system(size: 15, weight: .bold)).tracking(1.4).foregroundStyle(.white)
-                    Spacer()
-                    Button("Close") { gameViewVisible = false }.font(.caption)
-                }
-                if let event {
-                    scoreBlock(event)
-                    if let venue = event.venue, !venue.isEmpty {
-                        Text(venue).font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
-                    }
-                    ForEach([(event.awayTeam, "AWAY"), (event.homeTeam, "HOME")], id: \.1) { team, _ in
-                        if let team {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(team.name.uppercased()).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                                Text(team.records.compactMap { $0.summary }.joined(separator: " · "))
-                                    .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
-                            }
-                        }
-                    }
-                    if let p = state.primary {
-                        Text(specsLine(p)).font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(RallyTheme.rallyCyan)
-                    }
-                } else if let channel {
-                    Text(channel.name).font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
-                    if let now = channel.guide?.now?.title {
-                        Text("Now · \(now)").font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
-                    }
-                    if let next = channel.guide?.next?.title {
-                        Text("Next · \(next)").font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
-                    }
-                }
-                Spacer()
-            }
-            .padding(20)
-            .frame(width: 360)
-            .background(RallyTheme.background.opacity(0.96))
-            .overlay(Rectangle().stroke(RallyTheme.glassBorder, lineWidth: 1).opacity(0.6), alignment: .leading)
-        }
-    }
-
-    private func scoreBlock(_ event: SportEvent) -> some View {
-        HStack(spacing: 12) {
-            teamBadge(event.awayTeam?.logoUrl, event.awayTeam?.abbreviation)
-            VStack {
-                if event.status == .live || event.status == .halftime || event.status == .finished {
-                    Text("\(event.scoreAway.map(String.init) ?? "–") – \(event.scoreHome.map(String.init) ?? "–")")
-                        .font(.system(size: 26, weight: .black)).foregroundStyle(.white)
-                } else {
-                    Text("VS").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
-                }
-                Text(event.gameStatusDetail ?? Artwork.displayLeague(event.league))
-                    .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
-            }
-            teamBadge(event.homeTeam?.logoUrl, event.homeTeam?.abbreviation)
-        }
-    }
-
-    private func teamBadge(_ url: String?, _ abbr: String?) -> some View {
-        ZStack {
-            Circle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 46, height: 46)
-            if let url, let link = URL(string: url) {
-                AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
-                    Text((abbr ?? "TBD").prefix(3)).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                }
-                .frame(width: 38, height: 38)
-            } else {
-                Text((abbr ?? "TBD").prefix(3)).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-            }
-        }
-    }
-
     // MARK: Diagnostics (trace + specs)
 
     private var diagnosticsPanel: some View {
@@ -593,7 +551,7 @@ struct PlayerView: View {
         }
     }
 
-    private func diagRow(_ label: String, _ value: String) -> some View {
+    func diagRow(_ label: String, _ value: String) -> some View {
         HStack {
             Text(label).font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
             Spacer()
@@ -601,7 +559,7 @@ struct PlayerView: View {
         }
     }
 
-    private func healthLabel(_ score: Int) -> String {
+    func healthLabel(_ score: Int) -> String {
         if score >= 55 { return "Excellent" }
         if score >= 15 { return "Good" }
         if score >= -20 { return "Fair" }

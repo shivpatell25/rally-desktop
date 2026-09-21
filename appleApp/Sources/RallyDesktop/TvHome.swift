@@ -459,11 +459,12 @@ struct TvLiveCard: View {
     var event: SportEvent
     var focus: FocusState<String?>.Binding
     var size: CGSize?
+    var onSelect: (() -> Void)?
     @EnvironmentObject var store: RallyStore
     private var id: String { "live-\(event.id)" }
     private var isLive: Bool { event.status == .live || event.status == .halftime }
     var body: some View {
-        Button { store.show(.eventDetail(event)) } label: {
+        Button { if let fn = onSelect { fn() } else { store.show(.eventDetail(event)) } } label: {
             ZStack {
                 if let img = tvArt(Artwork.shelfBackdrop(event: event)) {
                     Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)

@@ -199,4 +199,42 @@ final class RallyDesktopTests: XCTestCase {
         XCTAssertNotNil(Artwork.artURL("rally_wordmark"))
         XCTAssertNotNil(Artwork.artURL("hero_landscape_football_rally"))
     }
+
+    func testSummaryMapping() async {
+        let json = """
+        {"leaders": [{"team": {"abbreviation": "KC", "logo": "http://x/kc.png"},
+          "leaders": [{"displayName": "Passing", "leaders": [
+            {"displayValue": "280 YDS", "athlete": {"displayName": "P. Mahomes", "shortName": "P. Mahomes",
+              "headshot": {"href": "http://x/m.png"}, "position": {"abbreviation": "QB"}}}]}]}],
+         "videos": [{"id": 7, "headline": "Mahomes 40-yard TD", "description": "Deep strike",
+          "duration": 42, "thumbnail": "http://x/t.jpg",
+          "links": {"source": {"HLS": {"HD": {"href": "http://x/h.m3u8"}}}}},
+          {"id": 8, "headline": "", "links": {}}]}
+        """
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.body = json.data(using: .utf8)
+        let client = EspnClient(session: URLSession(configuration: config))
+        let detail = await client.fetchSummary(sport: "football", league: "nfl", eventId: "e1")
+        XCTAssertEqual(detail.leaders.count, 1)
+        XCTAssertEqual(detail.leaders[0].playerShortName, "P. Mahomes")
+        XCTAssertEqual(detail.leaders[0].statDisplay, "280 YDS")
+        XCTAssertEqual(detail.leaders[0].teamAbbr, "KC")
+        XCTAssertEqual(detail.clips.count, 1)
+        XCTAssertEqual(detail.clips[0].streamUrl, "http://x/h.m3u8")
+        XCTAssertEqual(detail.clips[0].durationSeconds, 42)
+    }
+}
+
+private final class StubURLProtocol: URLProtocol {
+    static var body: Data?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let res = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: res, cacheStoragePolicy: .notAllowed)
+        if let body = Self.body { client?.urlProtocol(self, didLoad: body) }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
