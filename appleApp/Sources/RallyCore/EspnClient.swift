@@ -49,7 +49,65 @@ private struct EspnBroadcast: Decodable {
 private struct EspnVenue: Decodable {
     var fullName: String?
 }
-
+private struct EspnSummaryResponse: Decodable {
+    var leaders: [EspnLeaderGroup]?
+    var videos: [EspnVideo]?
+}
+private struct EspnLeaderGroup: Decodable {
+    var team: EspnTeam?
+    var leaders: [EspnLeaderCategory]?
+}
+private struct EspnLeaderCategory: Decodable {
+    var name: String?
+    var displayName: String?
+    var leaders: [EspnLeaderItem]?
+}
+private struct EspnLeaderItem: Decodable {
+    var displayValue: String?
+    var athlete: EspnAthlete?
+}
+private struct EspnAthlete: Decodable {
+    var fullName: String?
+    var displayName: String?
+    var shortName: String?
+    var headshot: EspnHeadshot?
+    var position: EspnPosition?
+    var jersey: String?
+}
+private struct EspnHeadshot: Decodable {
+    var href: String?
+}
+private struct EspnPosition: Decodable {
+    var abbreviation: String?
+}
+private struct EspnVideo: Decodable {
+    var id: Int64?
+    var headline: String?
+    var description: String?
+    var duration: Int?
+    var thumbnail: String?
+    var links: EspnVideoLinks?
+}
+private struct EspnVideoLinks: Decodable {
+    var web: EspnHref?
+    var source: EspnVideoSources?
+    var mobile: EspnVideoMobile?
+}
+private struct EspnVideoMobile: Decodable {
+    var source: EspnHref?
+}
+private struct EspnVideoSources: Decodable {
+    var href: String?
+    var HD: EspnHref?
+    var HLS: EspnHlsSource?
+}
+private struct EspnHlsSource: Decodable {
+    var href: String?
+    var HD: EspnHref?
+}
+private struct EspnHref: Decodable {
+    var href: String?
+}
 /// ESPN scoreboard client. Base + league map mirror Android `DataModule`/`EspnRepositoryImpl`.
 public final class EspnClient: Sendable {
     public static let baseURL = "https://site.api.espn.com/apis/site/v2/"
@@ -123,5 +181,58 @@ public final class EspnClient: Sendable {
             homeTeam: team(home), awayTeam: team(away), startTime: start, status: status,
             scoreHome: home?.score.flatMap(Int.init), scoreAway: away?.score.flatMap(Int.init),
             sport: sport, league: domainLeague, venue: comp?.venue?.fullName, gameStatusDetail: detail)
+    }
+
+    public struct GameDetail: Sendable {
+        public var leaders: [PlayerLeader]
+        public var clips: [HighlightClip]
+    }
+
+    /// Per-game summary: leaders + highlight videos. Mirrors the
+    /// getSummary enrichment in EspnRepositoryImpl.
+    public func fetchSummary(sport: String, league: String, eventId: String) async -> GameDetail {
+        var comps = URLComponents(string: "\(Self.baseURL)sports/\(sport)/\(league)/summary")!
+        comps.queryItems = [URLQueryItem(name: "event", value: eventId)]
+        guard let url = comps.url else { return GameDetail(leaders: [], clips: []) }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("Rally/macOS", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await session.data(for: req),
+              let summary = try? decoder.decode(EspnSummaryResponse.self, from: data) else {
+            return GameDetail(leaders: [], clips: [])
+        }
+        var leaders: [PlayerLeader] = []
+        for group in summary.leaders ?? [] {
+            for cat in group.leaders ?? [] {
+                guard let top = cat.leaders?.first, let athlete = top.athlete else { continue }
+                let short = athlete.shortName ?? athlete.displayName ?? athlete.fullName ?? ""
+                if short.isEmpty { continue }
+                leaders.append(PlayerLeader(
+                    category: cat.displayName ?? cat.name ?? "Leader",
+                    teamLogoUrl: group.team?.logo, teamAbbr: group.team?.abbreviation,
+                    playerShortName: short, statDisplay: top.displayValue ?? "",
+                    position: athlete.position?.abbreviation, headshotUrl: athlete.headshot?.href))
+            }
+        }
+        var seen = Set<String>()
+        let clips: [HighlightClip] = (summary.videos ?? []).compactMap { video in
+            guard let title = video.headline?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            let url = video.links?.source?.HLS?.HD?.href
+                ?? video.links?.source?.HLS?.href
+                ?? video.links?.source?.HD?.href
+                ?? video.links?.source?.href
+                ?? video.links?.mobile?.source?.href
+            let id = video.id.map(String.init) ?? title
+            guard seen.insert(id).inserted else { return nil }
+            return HighlightClip(id: id, title: title,
+                description: video.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                durationSeconds: video.duration, thumbnailUrl: video.thumbnail,
+                streamUrl: url, webUrl: video.links?.web?.href)
+        }
+        return GameDetail(leaders: leaders, clips: clips)
+    }
+
+    public static func path(forLeague domainLeague: String) -> (sport: String, path: String)? {
+        leagues.first(where: { $0.league == domainLeague }).map { ($0.sport, $0.path) }
     }
 }

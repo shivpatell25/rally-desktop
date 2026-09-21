@@ -26,6 +26,9 @@ final class PlayerState: ObservableObject {
     @Published var trace: [String] = []
     @Published var isPlaying = false
     @Published var paused = false
+    @Published var leaders: [PlayerLeader] = []
+    @Published var clips: [HighlightClip] = []
+    @Published var detailLoading = false
     @Published var positionText = "0:00:00"
     @Published var positionFraction: Double = 0
     @Published var showDiagnostics = false

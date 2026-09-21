@@ -119,8 +119,10 @@ struct RallyTopBar: View {
             }
             .frame(width: 300, alignment: .trailing)
         }
-        .padding(.horizontal, m.hPad)
-        .frame(height: m.s(88))
+        .padding(.leading, m.hPad + 12)
+        .padding(.trailing, m.hPad + 12)
+        .padding(.top, 20)
+        .frame(height: m.s(88) + 20)
     }
 
     @Namespace private var capsuleMotion
