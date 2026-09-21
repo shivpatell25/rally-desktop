@@ -141,17 +141,20 @@ struct ContentView: View {
     @EnvironmentObject var store: RallyStore
     @State private var destination: TvDestination = LaunchArgs.destination
     var body: some View {
-        VStack(spacing: 0) {
-            RallyTopBar(destination: $destination,
-                        onSearch: { store.show(.search) },
-                        onSettings: { store.show(.settings) })
-            switch destination {
-            case .home: TvHomeDashboard(destination: $destination)
-            case .live: TvLiveRow()
-            case .leagues: TvLeaguesHome()
-            case .highlights: TvHighlights()
-            case .myTeams: TvMyTeams()
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                RallyTopBar(destination: $destination,
+                            onSearch: { store.show(.search) },
+                            onSettings: { store.show(.settings) })
+                switch destination {
+                case .home: TvHomeDashboard(destination: $destination)
+                case .live: TvLiveRow()
+                case .leagues: TvLeaguesHome()
+                case .highlights: TvHighlights()
+                case .myTeams: TvMyTeams()
+                }
             }
+            .environment(\.tvMetrics, TvMetrics(width: geo.size.width))
         }
         .background(RallyTheme.background)
         .task {

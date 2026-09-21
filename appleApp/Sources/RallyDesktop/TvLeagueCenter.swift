@@ -4,6 +4,7 @@ import SwiftUI
 /// League center. Mirrors LeagueHubDashboard: eyebrow + title + counts,
 /// Back/Games/Standings tabs, day pager, portrait game cards.
 struct TvLeagueCenter: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     var league: String
     @EnvironmentObject var store: RallyStore
     @State private var tab = 0
@@ -56,13 +57,13 @@ struct TvLeagueCenter: View {
                         }
                     }
                 }
-                .padding(.horizontal, 34).padding(.top, 10)
+                .padding(.horizontal, m.hPad).padding(.top, 10)
                 if tab == 0 {
                     Text("GAMES").font(.system(size: 15, weight: .black)).tracking(1.6)
-                        .foregroundStyle(.white).padding(.horizontal, 34)
+                        .foregroundStyle(.white).padding(.horizontal, m.hPad)
                     dayPager
                     if loadingDay {
-                        ProgressView().padding(.horizontal, 34)
+                        ProgressView().padding(.horizontal, m.hPad)
                     } else if let day = dayEvents, !day.isEmpty {
                         portraitGrid(day)
                     } else {
@@ -70,7 +71,7 @@ struct TvLeagueCenter: View {
                     }
                 } else {
                     Text("STANDINGS").font(.system(size: 15, weight: .black)).tracking(1.6)
-                        .foregroundStyle(.white).padding(.horizontal, 34)
+                        .foregroundStyle(.white).padding(.horizontal, m.hPad)
                     standingsGrid
                 }
             }
@@ -96,7 +97,7 @@ struct TvLeagueCenter: View {
             Button("›") { dayOffset += 1 }.buttonStyle(.plain)
                 .font(.system(size: 20, weight: .bold)).foregroundStyle(RallyTheme.textSecondary)
         }
-        .padding(.horizontal, 34)
+        .padding(.horizontal, m.hPad)
     }
 
     private func loadDay() async {
@@ -122,7 +123,7 @@ struct TvLeagueCenter: View {
                     TvPortraitCard(event: event, focus: $focus)
                 }
             }
-            .padding(.horizontal, 34).padding(.vertical, 6)
+            .padding(.horizontal, m.hPad).padding(.vertical, 6)
         }
     }
 
@@ -142,7 +143,7 @@ struct TvLeagueCenter: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
             }
         }
-        .padding(.horizontal, 34)
+        .padding(.horizontal, m.hPad)
     }
 
     private func leagueButton(_ label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
@@ -160,6 +161,7 @@ struct TvLeagueCenter: View {
 
 /// Portrait game card. Mirrors AppleTvStadiumCard (240x360 proportions).
 struct TvPortraitCard: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     var event: SportEvent
     var focus: FocusState<String?>.Binding
     @EnvironmentObject var store: RallyStore
@@ -200,7 +202,7 @@ struct TvPortraitCard: View {
                         Spacer(minLength: 8)
                         portraitLogo(event.homeTeam?.logoUrl, event.homeTeam?.abbreviation)
                     }
-                    .frame(width: 218)
+                    .frame(width: m.s(218))
                     Spacer()
                     Text(event.awayTeam?.name ?? "TBD").font(.system(size: 17, weight: .bold))
                         .foregroundStyle(.white).lineLimit(1)
@@ -213,7 +215,7 @@ struct TvPortraitCard: View {
                 }
                 .padding(16)
             }
-            .frame(width: 250, height: 375)
+            .frame(width: m.portraitCard.width, height: m.portraitCard.height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
@@ -228,12 +230,12 @@ struct TvPortraitCard: View {
         ZStack {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color(red: 15/255, green: 23/255, blue: 36/255, opacity: 0.65))
-                .frame(width: 74, height: 74)
+                .frame(width: m.s(74), height: m.s(74))
             if let url, let link = URL(string: url) {
                 AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
                     Text((abbr ?? "TBD").prefix(3)).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                 }
-                .frame(width: 62, height: 62)
+                .frame(width: m.s(62), height: m.s(62))
             } else {
                 Text((abbr ?? "TBD").prefix(3)).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
             }
@@ -243,6 +245,7 @@ struct TvPortraitCard: View {
 
 /// Leagues home: mark grid routing into the center. Replaces the old list.
 struct TvLeaguesHome: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @FocusState private var focus: String?
     var body: some View {
@@ -257,7 +260,7 @@ struct TvLeaguesHome: View {
                         }
                     }
                 }
-                .padding(.horizontal, 34).padding(.vertical, 14)
+                .padding(.horizontal, m.hPad).padding(.vertical, 14)
             }
             .background(RallyTheme.background)
         }

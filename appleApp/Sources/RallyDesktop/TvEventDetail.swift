@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Event detail. Mirrors EventDetailsView: compact hero + three glass panels.
 struct TvEventDetail: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     var event: SportEvent
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
@@ -16,7 +17,7 @@ struct TvEventDetail: View {
                     infoPanel
                 }
             }
-            .padding(.horizontal, 34).padding(.vertical, 12)
+            .padding(.horizontal, m.hPad).padding(.vertical, 12)
         }
         .background(RallyTheme.background)
     }
@@ -67,10 +68,10 @@ struct TvEventDetail: View {
                                     .foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
                             }
                         }
-                        .frame(width: 170)
+                        .frame(width: m.s(170))
                         teamHero(event.homeTeam).frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: 640)
+                    .frame(maxWidth: m.s(640))
                     Text([event.venue, event.gameStatusDetail].compactMap { $0?.isEmpty == false ? $0 : nil }
                         .joined(separator: "  ·  "))
                         .font(.system(size: 10, weight: .medium))
@@ -100,18 +101,18 @@ struct TvEventDetail: View {
                         }
                     }
                 }
-                .padding(.leading, 36).padding(.vertical, 18)
+                .padding(.leading, m.s(36)).padding(.vertical, m.s(18))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 280)
+                Spacer(minLength: m.s(280))
             }
             if let mark = tvArt("rally_mark_ui") {
                 Image(nsImage: mark).resizable().aspectRatio(contentMode: .fit)
-                    .frame(width: 30, height: 30)
+                    .frame(width: m.s(30), height: m.s(30))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .padding(22)
+                    .padding(m.s(22))
             }
         }
-        .frame(height: 300)
+        .frame(height: m.detailHeroHeight)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
     }
@@ -121,12 +122,12 @@ struct TvEventDetail: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(red: 15/255, green: 23/255, blue: 36/255, opacity: 0.65))
-                    .frame(width: 92, height: 92)
+                    .frame(width: m.s(92), height: m.s(92))
                 if let logo = team?.logoUrl, let url = URL(string: logo) {
                     AsyncImage(url: url) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
                         Text(team?.abbreviation ?? "TBD").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
                     }
-                    .frame(width: 76, height: 76)
+                    .frame(width: m.s(76), height: m.s(76))
                 } else {
                     Text(team?.abbreviation ?? "TBD").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
                 }
@@ -179,7 +180,7 @@ struct TvEventDetail: View {
             Spacer(minLength: 0)
         }
         .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: m.panelMinHeight, alignment: .topLeading)
         .background(LinearGradient(colors: [Color(red: 23/255, green: 36/255, blue: 55/255, opacity: 0.72),
                                             Color(red: 14/255, green: 25/255, blue: 39/255, opacity: 0.64),
                                             Color(red: 7/255, green: 13/255, blue: 22/255, opacity: 0.56)],

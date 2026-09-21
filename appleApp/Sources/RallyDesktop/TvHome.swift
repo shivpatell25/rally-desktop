@@ -16,6 +16,7 @@ enum TvDestination: Hashable {
 // MARK: - Top bar (mirrors RallyTopBar)
 
 struct RallyTopBar: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @Binding var destination: TvDestination
     var onSearch: () -> Void = {}
@@ -55,8 +56,8 @@ struct RallyTopBar: View {
             }
             .padding(.trailing, 6)
         }
-        .padding(.horizontal, 34)
-        .frame(height: 64)
+        .padding(.horizontal, m.hPad)
+        .frame(height: m.s(64))
     }
 
     private func topNavItem(_ label: String, _ dest: TvDestination, dot: Bool = false) -> some View {
@@ -117,6 +118,7 @@ extension RallyStore {
 // MARK: - Dashboard (mirrors HomeContent)
 
 struct TvHomeDashboard: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @Binding var destination: TvDestination
     @FocusState private var focus: String?
@@ -129,7 +131,7 @@ struct TvHomeDashboard: View {
                 shelfTitle("BY SPORT")
                 sportShelf
             }
-            .padding(.horizontal, 34)
+            .padding(.horizontal, m.hPad)
             .padding(.top, 6).padding(.bottom, 18)
         }
         .onMoveCommand { dir in moveFocus(dir) }
@@ -193,6 +195,7 @@ struct TvHomeDashboard: View {
 // MARK: - Hero (mirrors HomeDashboardHero)
 
 struct TvHero: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     var featured: SportEvent?
     var mode: HeroMode
     var focus: FocusState<String?>.Binding
@@ -233,11 +236,11 @@ struct TvHero: View {
                                 Text(subText(event)).font(.system(size: 11, weight: .semibold)).tracking(0.6)
                                     .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                             }
-                            .frame(width: 150)
+                            .frame(width: m.s(150))
                             heroTeam(name: event.homeTeam?.name, abbr: event.homeTeam?.abbreviation, logo: event.homeTeam?.logoUrl)
                                 .frame(maxWidth: .infinity)
                         }
-                        .frame(maxWidth: 620)
+                        .frame(maxWidth: m.s(620))
                         Text([event.venue, event.gameStatusDetail].compactMap { $0?.isEmpty == false ? $0 : nil }
                             .joined(separator: "  ·  ").isEmpty
                             ? Artwork.displayLeague(event.league)
@@ -253,19 +256,19 @@ struct TvHero: View {
                             }
                         }
                     }
-                    .padding(.leading, 40).padding(.vertical, 22)
+                    .padding(.leading, m.s(40)).padding(.vertical, m.s(22))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 300)
                 }
             }
             if let mark = tvArt("rally_mark_ui") {
                 Image(nsImage: mark).resizable().aspectRatio(contentMode: .fit)
-                    .frame(width: 30, height: 30)
+                    .frame(width: m.s(30), height: m.s(30))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(22)
             }
         }
-        .frame(height: 300)
+        .frame(height: m.heroHeight)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
     }
@@ -365,6 +368,7 @@ struct TvHero: View {
 // MARK: - Live shelf card (mirrors HomeCompactLiveCard)
 
 struct TvLiveCard: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     var event: SportEvent
     var focus: FocusState<String?>.Binding
     @EnvironmentObject var store: RallyStore
@@ -413,7 +417,7 @@ struct TvLiveCard: View {
                 }
                 .padding(.horizontal, 15).padding(.vertical, 11)
             }
-            .frame(width: 300, height: 170)
+            .frame(width: m.liveCard.width, height: m.liveCard.height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
@@ -430,10 +434,10 @@ struct TvLiveCard: View {
                 AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
                     Text((abbr ?? "TBD").prefix(3)).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
                 }
-                .frame(width: 44, height: 44)
+                .frame(width: m.s(44), height: m.s(44))
             } else {
                 Text((abbr ?? "TBD").prefix(3)).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: m.s(44), height: m.s(44))
             }
         }
     }
@@ -442,6 +446,7 @@ struct TvLiveCard: View {
 // MARK: - Sport card (mirrors HomeCompactSportCard)
 
 struct TvSportCard: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     var title: String
     var events: [SportEvent]
     var focus: FocusState<String?>.Binding
@@ -469,12 +474,12 @@ struct TvSportCard: View {
                     }
                     if let mark = Artwork.leagueMark(league: title), let img = tvArt(mark) {
                         Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                            .frame(width: 72, height: 56)
+                            .frame(width: m.s(72), height: m.s(56))
                     } else {
                         Text(Artwork.leagueShortMark(league: title))
                             .font(.system(size: 22, weight: .bold)).tracking(1)
                             .foregroundStyle(RallyTheme.offWhite)
-                            .frame(height: 56)
+                            .frame(height: m.s(56))
                     }
                     Spacer()
                     Text(Artwork.displayLeague(title).uppercased())
@@ -483,7 +488,7 @@ struct TvSportCard: View {
                 }
                 .padding(12)
             }
-            .frame(width: 200, height: 150)
+            .frame(width: m.sportCard.width, height: m.sportCard.height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
@@ -498,6 +503,7 @@ struct TvSportCard: View {
 // MARK: - LIVE destination
 
 struct TvLiveRow: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @FocusState private var focus: String?
     var body: some View {
@@ -507,7 +513,7 @@ struct TvLiveRow: View {
                     TvLiveCard(event: event, focus: $focus)
                 }
             }
-            .padding(.horizontal, 34).padding(.vertical, 14)
+            .padding(.horizontal, m.hPad).padding(.vertical, 14)
         }
         .background(RallyTheme.background)
         .overlay { if store.liveEvents.isEmpty { Text("No games in progress").foregroundStyle(RallyTheme.textSecondary) } }
@@ -517,6 +523,7 @@ struct TvLiveRow: View {
 // MARK: - HIGHLIGHTS destination (finished games = recaps)
 
 struct TvHighlights: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @FocusState private var focus: String?
     private var recaps: [SportEvent] {
@@ -529,7 +536,7 @@ struct TvHighlights: View {
                     TvLiveCard(event: event, focus: $focus)
                 }
             }
-            .padding(.horizontal, 34).padding(.vertical, 14)
+            .padding(.horizontal, m.hPad).padding(.vertical, 14)
         }
         .background(RallyTheme.background)
         .overlay { if recaps.isEmpty { Text("No recaps yet").foregroundStyle(RallyTheme.textSecondary) } }
@@ -539,6 +546,7 @@ struct TvHighlights: View {
 // MARK: - MY TEAMS destination
 
 struct TvMyTeams: View {
+    @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
     var body: some View {
