@@ -14,10 +14,12 @@ struct PagedShelf<Item, Content: View>: View {
     var focus: FocusState<String?>.Binding
     @Binding var page: Int
     @ViewBuilder var content: (Item, CGSize, FocusState<String?>.Binding) -> Content
+    @State private var lastDelta = 1
 
     private var pageCount: Int { max(1, (items.count + pageSize - 1) / pageSize) }
     private var safePage: Int { min(max(0, page), pageCount - 1) }
-    private var visible: [Item] { Array(items.dropFirst(safePage * pageSize).prefix(pageSize)) }
+    private var visibleIds: [String] { Array(items.dropFirst(safePage * pageSize).prefix(pageSize)).map(idFor) }
+    private func item(for id: String) -> Item? { items.first(where: { idFor($0) == id }) }
     private var cardSize: CGSize {
         let viewport = m.width - m.hPad * 2
         let w = (viewport - m.cardSpacing * CGFloat(pageSize - 1)) / CGFloat(pageSize)
@@ -49,15 +51,21 @@ struct PagedShelf<Item, Content: View>: View {
                 }
             }
             HStack(spacing: m.cardSpacing) {
-                ForEach(Array(visible.enumerated()), id: \.offset) { _, item in
-                    content(item, cardSize, focus)
+                ForEach(visibleIds, id: \.self) { id in
+                    if let item = item(for: id) {
+                        content(item, cardSize, focus)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: lastDelta >= 0 ? .trailing : .leading).combined(with: .opacity),
+                                removal: .move(edge: lastDelta >= 0 ? .leading : .trailing).combined(with: .opacity)))
+                    }
                 }
                 // Keep row width stable on a short last page.
-                if visible.count < pageSize {
+                if visibleIds.count < pageSize {
                     Spacer(minLength: 0)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: page)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 20).onEnded { drag in
                 if drag.translation.width < -60 {
@@ -82,6 +90,7 @@ struct PagedShelf<Item, Content: View>: View {
     private func turn(_ delta: Int) {
         let next = min(max(0, safePage + delta), pageCount - 1)
         guard next != safePage else { return }
+        lastDelta = delta
         page = next
         let ids = Array(items.dropFirst(next * pageSize).prefix(pageSize)).map(idFor)
         focus.wrappedValue = delta > 0 ? ids.first : ids.last
@@ -89,10 +98,10 @@ struct PagedShelf<Item, Content: View>: View {
 
     private func step(_ delta: Int) {
         guard let cur = focus.wrappedValue else {
-            focus.wrappedValue = visible.map(idFor).first
+            focus.wrappedValue = visibleIds.first
             return
         }
-        let ids = visible.map(idFor)
+        let ids = visibleIds
         guard let col = ids.firstIndex(of: cur) else { return }
         let next = col + delta
         if next < 0 || next >= ids.count {

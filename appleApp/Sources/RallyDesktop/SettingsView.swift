@@ -37,7 +37,7 @@ struct SettingsView: View {
             }
             .frame(minWidth: 480)
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
         .navigationTitle("Settings")
     }
 

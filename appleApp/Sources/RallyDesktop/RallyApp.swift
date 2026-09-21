@@ -140,23 +140,38 @@ enum LaunchArgs {
 struct ContentView: View {
     @EnvironmentObject var store: RallyStore
     @State private var destination: TvDestination = LaunchArgs.destination
+    @State private var slideEdge: Edge = .trailing
+    @State private var prevTab = 0
+    private func tabIndex(_ d: TvDestination) -> Int {
+        switch d { case .home: 0; case .live: 1; case .leagues: 2; case .highlights: 3; case .myTeams: 4 }
+    }
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 RallyTopBar(destination: $destination,
                             onSearch: { store.show(.search) },
                             onSettings: { store.show(.settings) })
-                switch destination {
-                case .home: TvHomeDashboard(destination: $destination)
-                case .live: TvLiveRow()
-                case .leagues: TvLeaguesHome()
-                case .highlights: TvHighlights()
-                case .myTeams: TvMyTeams()
+                Group {
+                    switch destination {
+                    case .home: TvHomeDashboard(destination: $destination)
+                    case .live: TvLiveRow()
+                    case .leagues: TvLeaguesHome()
+                    case .highlights: TvHighlights()
+                    case .myTeams: TvMyTeams()
+                    }
                 }
+                .transition(.asymmetric(
+                    insertion: .move(edge: slideEdge).combined(with: .opacity),
+                    removal: .move(edge: slideEdge == .trailing ? .leading : .trailing).combined(with: .opacity)))
             }
             .environment(\.tvMetrics, TvMetrics(width: geo.size.width))
         }
-        .background(RallyTheme.background)
+        .animation(.smooth(duration: 0.35), value: destination)
+        .onChange(of: destination) { next in
+            slideEdge = tabIndex(next) >= prevTab ? .trailing : .leading
+            prevTab = tabIndex(next)
+        }
+        .background { AmbientBackground() }
         .task {
             await store.refresh()
             await store.checkUpdates()
@@ -167,10 +182,6 @@ struct ContentView: View {
             } else if let id = LaunchArgs.playId {
                 if let e = store.events.first(where: { $0.id == id }) { store.show(.player(event: e, channel: nil)) }
                 else if let e = store.featuredEvent { store.show(.player(event: e, channel: nil)) }
-            }
-            if let id = LaunchArgs.eventId {
-                if let e = store.events.first(where: { $0.id == id }) { store.show(.eventDetail(e)) }
-                else if let e = store.featuredEvent { store.show(.eventDetail(e)) }
             }
         }
         .sheet(item: $store.sheet) { sheet in
@@ -205,7 +216,7 @@ struct HomeView: View {
             }
             .padding(20)
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
         .overlay { if store.isLoading && store.events.isEmpty { ProgressView("Loading games…") } }
     }
 }
@@ -226,7 +237,7 @@ struct LeaguesView: View {
                 }
             }
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
     }
 }
 
@@ -259,7 +270,7 @@ struct SearchView: View {
                 }
             }
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
     }
     private var filteredEvents: [SportEvent] {
         guard !query.isEmpty else { return Array(store.events.prefix(20)) }

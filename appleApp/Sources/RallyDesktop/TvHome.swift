@@ -7,6 +7,23 @@ func tvArt(_ name: String) -> NSImage? {
     return NSImage(contentsOf: url)
 }
 
+/// Signature flare backdrop. Mirrors RallyAmbientSurface: navy base, v5 art,
+/// vertical scrim so content stays legible.
+struct AmbientBackground: View {
+    var body: some View {
+        ZStack {
+            RallyTheme.deepNavy
+            if let img = tvArt("rally_ambient_background") {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            }
+            LinearGradient(colors: [Color.black.opacity(0.09),
+                                    Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.14),
+                                    Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.66)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+        .ignoresSafeArea()
+    }
+}
 /// Native liquid glass on macOS 26+, layered-glass fallback below.
 extension View {
     @ViewBuilder
@@ -15,6 +32,15 @@ extension View {
             self.glassEffect(.regular, in: shape)
         } else {
             self.background(RallyTheme.glassSurface).clipShape(shape)
+        }
+    }
+
+    @ViewBuilder
+    func bounceOnChange(_ v: Bool) -> some View {
+        if #available(macOS 14, *) {
+            self.symbolEffect(.bounce, value: v)
+        } else {
+            self
         }
     }
 
@@ -57,22 +83,23 @@ struct RallyTopBar: View {
                     Image(nsImage: img)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 240, height: 48, alignment: .leading)
+                    .frame(width: 288, height: 58, alignment: .leading)
                 } else {
                     Text("rally").font(.system(size: 46, weight: .black, design: .rounded))
                         .foregroundStyle(RallyTheme.rallyLime)
                 }
             }
-            .frame(width: 280, alignment: .leading)
+            .frame(width: 300, alignment: .leading)
             Spacer()
-            HStack(spacing: 4) {
+            HStack(spacing: 0) {
                 capsuleItem(icon: "house.fill", label: "Home", dest: .home, dot: false)
                 capsuleItem(icon: "dot.radiowaves.left.and.right", label: "Live", dest: .live, dot: true)
                 capsuleItem(icon: "square.grid.2x2.fill", label: "Leagues", dest: .leagues, dot: false)
                 capsuleItem(icon: "play.rectangle.fill", label: "Highlights", dest: .highlights, dot: false)
                 capsuleItem(icon: "star.fill", label: "My Teams", dest: .myTeams, dot: false)
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .frame(width: 412)
             .rallyCapsule()
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: destination)
             Spacer()
@@ -90,7 +117,7 @@ struct RallyTopBar: View {
                         .rallyGlass(Circle())
                 }.buttonStyle(.plain)
             }
-            .frame(width: 280, alignment: .trailing)
+            .frame(width: 300, alignment: .trailing)
         }
         .padding(.horizontal, m.hPad)
         .frame(height: m.s(88))
@@ -107,6 +134,7 @@ struct RallyTopBar: View {
                         .font(.system(size: 18, weight: selected ? .semibold : .regular))
                         .foregroundStyle(selected ? RallyTheme.textPrimary : RallyTheme.textSecondary)
                         .scaleEffect(selected ? 1.12 : 1.0)
+                        .bounceOnChange(selected)
                     if dot {
                         Circle().fill(RallyTheme.liveRed).frame(width: 6, height: 6)
                             .offset(x: 12, y: -9)
@@ -117,7 +145,7 @@ struct RallyTopBar: View {
                     .foregroundStyle(selected ? RallyTheme.textPrimary : RallyTheme.textSecondary)
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
-            .frame(width: 68)
+            .frame(width: 76)
             .padding(.vertical, 4)
             .background {
                 if selected {
@@ -481,6 +509,7 @@ struct TvLiveCard: View {
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
                         lineWidth: focus.wrappedValue == id ? 2 : 1))
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
@@ -553,6 +582,7 @@ struct TvSportCard: View {
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
                         lineWidth: focus.wrappedValue == id ? 2 : 1))
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
@@ -574,7 +604,7 @@ struct TvLiveRow: View {
             }
             .padding(.horizontal, m.hPad).padding(.vertical, 14)
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
         .overlay { if store.liveEvents.isEmpty { Text("No games in progress").foregroundStyle(RallyTheme.textSecondary) } }
     }
 }
@@ -597,7 +627,7 @@ struct TvHighlights: View {
             }
             .padding(.horizontal, m.hPad).padding(.vertical, 14)
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
         .overlay { if recaps.isEmpty { Text("No recaps yet").foregroundStyle(RallyTheme.textSecondary) } }
     }
 }
@@ -624,7 +654,7 @@ struct TvMyTeams: View {
                 }
             }
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
         .overlay {
             if settings.favoriteTeamProfiles.isEmpty {
                 Text("Star teams to build your Up Next").foregroundStyle(RallyTheme.textSecondary)

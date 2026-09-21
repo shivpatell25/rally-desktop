@@ -19,7 +19,7 @@ struct TvEventDetail: View {
             }
             .padding(.horizontal, m.hPad).padding(.vertical, 12)
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
     }
 
     private var isLive: Bool { event.status == .live || event.status == .halftime }

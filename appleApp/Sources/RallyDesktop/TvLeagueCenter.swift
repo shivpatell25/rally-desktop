@@ -77,7 +77,7 @@ struct TvLeagueCenter: View {
             }
             .padding(.bottom, 18)
         }
-        .background(RallyTheme.background)
+        .background { AmbientBackground() }
         .task(id: dayOffset) { await loadDay() }
     }
 
@@ -221,6 +221,7 @@ struct TvPortraitCard: View {
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
                         lineWidth: focus.wrappedValue == id ? 2 : 1))
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
@@ -262,7 +263,7 @@ struct TvLeaguesHome: View {
                 }
                 .padding(.horizontal, m.hPad).padding(.vertical, 14)
             }
-            .background(RallyTheme.background)
+            .background { AmbientBackground() }
         }
     }
 }
