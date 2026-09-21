@@ -7,6 +7,17 @@ func tvArt(_ name: String) -> NSImage? {
     return NSImage(contentsOf: url)
 }
 
+/// Native liquid glass on macOS 26+, layered-glass fallback below.
+extension View {
+    @ViewBuilder
+    func rallyGlass<S: Shape>(_ shape: S) -> some View {
+        if #available(macOS 26, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self.background(RallyTheme.glassSurface).clipShape(shape)
+        }
+    }
+}
 // MARK: - Destinations (mirrors RallyDestination)
 
 enum TvDestination: Hashable {
@@ -28,9 +39,9 @@ struct RallyTopBar: View {
                 Image(nsImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(width: 150, height: 30, alignment: .leading)
+                    .frame(width: 200, height: 40, alignment: .leading)
             } else {
-                Text("rally").font(.system(size: 30, weight: .black, design: .rounded))
+                Text("rally").font(.system(size: 38, weight: .black, design: .rounded))
                     .foregroundStyle(RallyTheme.rallyLime)
             }
             Spacer()
@@ -41,25 +52,29 @@ struct RallyTopBar: View {
                 topNavItem("HIGHLIGHTS", .highlights)
                 topNavItem("MY TEAMS", .myTeams)
             }
-            .padding(5)
-            .background(RallyTheme.glassSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(RallyTheme.glassBorder, lineWidth: 1))
+            .padding(6)
+            .rallyGlass(RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(RallyTheme.glassBorder, lineWidth: 1))
             Spacer()
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Button(action: onSearch) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 17)).foregroundStyle(RallyTheme.textPrimary)
+                    Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(RallyTheme.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .rallyGlass(Circle())
                 }.buttonStyle(.plain)
                 Button(action: onSettings) {
-                    Image(systemName: "gearshape").font(.system(size: 17)).foregroundStyle(RallyTheme.textPrimary)
+                    Image(systemName: "gearshape").font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(RallyTheme.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .rallyGlass(Circle())
                 }.buttonStyle(.plain)
             }
             .padding(.trailing, 6)
         }
         .padding(.horizontal, m.hPad)
-        .frame(height: m.s(64))
+        .frame(height: m.s(88))
     }
-
     private func topNavItem(_ label: String, _ dest: TvDestination, dot: Bool = false) -> some View {
         Button {
             if dest == .home || dest == .live || dest == .leagues || dest == .highlights || dest == .myTeams {
@@ -68,13 +83,13 @@ struct RallyTopBar: View {
         } label: {
             HStack(spacing: 6) {
                 if dot { Circle().fill(RallyTheme.liveRed).frame(width: 6, height: 6) }
-                Text(label).font(.system(size: 11, weight: .semibold)).tracking(1)
+                Text(label).font(.system(size: 13, weight: .semibold)).tracking(1)
                     .foregroundStyle(destination == dest ? RallyTheme.textPrimary : RallyTheme.textSecondary)
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 14).padding(.vertical, 8)
+            .padding(.horizontal, 18).padding(.vertical, 10)
             .background(destination == dest ? RallyTheme.surfaceFocused : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
     }
@@ -132,7 +147,7 @@ struct TvHomeDashboard: View {
                 sportShelf
             }
             .padding(.horizontal, m.hPad)
-            .padding(.top, 6).padding(.bottom, 18)
+            .padding(.top, 16).padding(.bottom, 18)
         }
         .onMoveCommand { dir in moveFocus(dir) }
     }
