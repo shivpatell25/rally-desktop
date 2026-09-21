@@ -50,8 +50,8 @@ struct RallyTopBar: View {
     var onSearch: () -> Void = {}
     var onSettings: () -> Void = {}
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 0) {
+        HStack(spacing: 0) {
+            Group {
                 if let url = Artwork.artURL("rally_wordmark"),
                    let img = NSImage(contentsOf: url) {
                     Image(nsImage: img)
@@ -62,24 +62,9 @@ struct RallyTopBar: View {
                     Text("rally").font(.system(size: 46, weight: .black, design: .rounded))
                         .foregroundStyle(RallyTheme.rallyLime)
                 }
-                Spacer()
-                HStack(spacing: 12) {
-                    Button(action: onSearch) {
-                        Image(systemName: "magnifyingglass").font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(RallyTheme.textPrimary)
-                            .frame(width: 52, height: 52)
-                            .rallyGlass(Circle())
-                    }.buttonStyle(.plain)
-                    Button(action: onSettings) {
-                        Image(systemName: "gearshape").font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(RallyTheme.textPrimary)
-                            .frame(width: 52, height: 52)
-                            .rallyGlass(Circle())
-                    }.buttonStyle(.plain)
-                }
-                .padding(.trailing, 6)
             }
-            .padding(.horizontal, m.hPad)
+            .frame(width: 280, alignment: .leading)
+            Spacer()
             HStack(spacing: 4) {
                 capsuleItem(icon: "house.fill", label: "Home", dest: .home, dot: false)
                 capsuleItem(icon: "dot.radiowaves.left.and.right", label: "Live", dest: .live, dot: true)
@@ -87,10 +72,28 @@ struct RallyTopBar: View {
                 capsuleItem(icon: "play.rectangle.fill", label: "Highlights", dest: .highlights, dot: false)
                 capsuleItem(icon: "star.fill", label: "My Teams", dest: .myTeams, dot: false)
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .padding(.horizontal, 10).padding(.vertical, 8)
             .rallyCapsule()
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: destination)
+            Spacer()
+            HStack(spacing: 12) {
+                Button(action: onSearch) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(RallyTheme.textPrimary)
+                        .frame(width: 52, height: 52)
+                        .rallyGlass(Circle())
+                }.buttonStyle(.plain)
+                Button(action: onSettings) {
+                    Image(systemName: "gearshape").font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(RallyTheme.textPrimary)
+                        .frame(width: 52, height: 52)
+                        .rallyGlass(Circle())
+                }.buttonStyle(.plain)
+            }
+            .frame(width: 280, alignment: .trailing)
         }
-        .padding(.top, 8)
+        .padding(.horizontal, m.hPad)
+        .frame(height: m.s(88))
     }
 
     @Namespace private var capsuleMotion

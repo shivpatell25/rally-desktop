@@ -34,6 +34,38 @@ public struct TeamRecord: Codable, Sendable, Equatable {
     public init(name: String? = nil, summary: String? = nil) { self.name = name; self.summary = summary }
 }
 
+public struct HighlightClip: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var title: String
+    public var description: String?
+    public var durationSeconds: Int?
+    public var thumbnailUrl: String?
+    public var streamUrl: String?
+    public var webUrl: String?
+    public init(id: String, title: String, description: String? = nil, durationSeconds: Int? = nil,
+                thumbnailUrl: String? = nil, streamUrl: String? = nil, webUrl: String? = nil) {
+        self.id = id; self.title = title; self.description = description
+        self.durationSeconds = durationSeconds; self.thumbnailUrl = thumbnailUrl
+        self.streamUrl = streamUrl; self.webUrl = webUrl
+    }
+}
+
+public struct PlayerLeader: Codable, Sendable, Equatable {
+    public var category: String
+    public var teamLogoUrl: String?
+    public var teamAbbr: String?
+    public var playerShortName: String
+    public var statDisplay: String
+    public var position: String?
+    public var headshotUrl: String?
+    public init(category: String, teamLogoUrl: String? = nil, teamAbbr: String? = nil,
+                playerShortName: String, statDisplay: String, position: String? = nil, headshotUrl: String? = nil) {
+        self.category = category; self.teamLogoUrl = teamLogoUrl; self.teamAbbr = teamAbbr
+        self.playerShortName = playerShortName; self.statDisplay = statDisplay
+        self.position = position; self.headshotUrl = headshotUrl
+    }
+}
+
 public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var name: String
