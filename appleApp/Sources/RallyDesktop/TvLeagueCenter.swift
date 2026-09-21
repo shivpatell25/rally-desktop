@@ -244,26 +244,101 @@ struct TvPortraitCard: View {
     }
 }
 
-/// Leagues home: mark grid routing into the center. Replaces the old list.
+/// Leagues directory. Mirrors LeaguesScreen: header plus five-at-a-time
+/// directory cards routing into the league center.
 struct TvLeaguesHome: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @FocusState private var focus: String?
+    @State private var page = 0
     var body: some View {
         if let pending = store.pendingLeague {
             TvLeagueCenter(league: pending)
         } else {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 14)], spacing: 14) {
-                    ForEach(store.leagueShelves, id: \.title) { shelf in
-                        TvSportCard(title: shelf.title, events: shelf.events, focus: $focus) {
-                            store.pendingLeague = shelf.title
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("LEAGUES").font(.system(size: 11, weight: .bold)).tracking(1.5)
+                        .foregroundStyle(RallyTheme.rallyCyan)
+                    Text("Every sport. One starting point.").font(.system(size: 27, weight: .black)).tracking(-0.6)
+                        .foregroundStyle(.white)
+                    Text("Five leagues at a time. Open one for games, standings, and channels.").font(.system(size: 11))
+                        .foregroundStyle(RallyTheme.textSecondary)
+                }
+                .padding(.horizontal, m.hPad).padding(.top, 12)
+                .frame(height: 74, alignment: .topLeading)
+                PagedShelf(title: nil as String?, items: store.leagueShelves, pageSize: 5, aspect: 1.0,
+                           idFor: { $0.title }, focus: $focus, page: $page) { shelf, size, focus in
+                    TvDirectoryCard(title: shelf.title, events: shelf.events, focus: focus, size: size) {
+                        store.pendingLeague = shelf.title
                     }
                 }
-                .padding(.horizontal, m.hPad).padding(.vertical, 14)
+                .padding(.horizontal, m.hPad)
+                Spacer(minLength: 0)
             }
             .background { AmbientBackground() }
         }
+    }
+}
+
+struct TvDirectoryCard: View {
+    var title: String
+    var events: [SportEvent]
+    var focus: FocusState<String?>.Binding
+    var size: CGSize?
+    @Environment(\.tvMetrics) private var m: TvMetrics
+    @EnvironmentObject var store: RallyStore
+    var onSelect: () -> Void = {}
+    private var id: String { "dir-\(title)" }
+    private var hasLive: Bool { events.contains { $0.status == .live || $0.status == .halftime } }
+    var body: some View {
+        Button(action: onSelect) {
+            ZStack {
+                if let img = tvArt(Artwork.leagueBackdrop(league: title)) {
+                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+                }
+                LinearGradient(colors: [Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.18),
+                                        Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.9)],
+                               startPoint: .top, endPoint: .bottom)
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("LEAGUE CENTER").font(.system(size: 9, weight: .bold)).tracking(0.8)
+                            .foregroundStyle(RallyTheme.textSecondary)
+                        Spacer()
+                        if hasLive {
+                            Text("● LIVE").font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(RallyTheme.liveRed)
+                        }
+                    }
+                    Spacer()
+                    if let mark = Artwork.leagueMark(league: title), let img = tvArt(mark) {
+                        Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
+                            .frame(width: 92, height: 72)
+                    } else {
+                        Text(Artwork.leagueShortMark(league: title))
+                            .font(.system(size: 28, weight: .black)).tracking(1)
+                            .foregroundStyle(RallyTheme.offWhite)
+                            .frame(height: 72)
+                    }
+                    Spacer()
+                    Text(Artwork.displayLeague(title).uppercased())
+                        .font(.system(size: 14, weight: .black)).tracking(0.5)
+                        .foregroundStyle(.white).lineLimit(1)
+                    Text(events.isEmpty ? "OPEN LEAGUE CENTER" : "\(events.count) GAMES")
+                        .font(.system(size: 9, weight: .bold)).tracking(0.7)
+                        .foregroundStyle(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.textSecondary)
+                }
+                .padding(15)
+            }
+            .frame(width: (size ?? CGSize(width: 220, height: 220)).width,
+                   height: (size ?? CGSize(width: 220, height: 220)).height)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22),
+                        lineWidth: focus.wrappedValue == id ? 2 : 1))
+            .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+        }
+        .buttonStyle(.plain)
+        .focused(focus, equals: id)
     }
 }

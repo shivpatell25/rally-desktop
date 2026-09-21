@@ -24,7 +24,7 @@ enum RallyTab: Int, Hashable {
 /// multi-view transitions always surface (SwiftUI presents one sheet per level).
 enum AppSheet: Identifiable {
     case eventDetail(SportEvent)
-    case player(event: SportEvent?, channel: IptvChannel?, clip: HighlightClip? = nil)
+    case player(event: SportEvent?, channel: IptvChannel?, clip: HighlightClip? = nil, picker: Bool = false)
     case multiView
     case search
     case settings
@@ -32,7 +32,7 @@ enum AppSheet: Identifiable {
     var id: String {
         switch self {
         case .eventDetail(let e): return "event-\(e.id)"
-        case .player(let e, let c, let clip):
+        case .player(let e, let c, let clip, _):
             return "player-\(e?.id ?? c?.id ?? "none")-\(clip?.id ?? "live")"
         case .multiView: return "multiview"
         case .search: return "search"
@@ -214,8 +214,8 @@ struct ContentView: View {
                         removal: .move(edge: slideEdge == .trailing ? .leading : .trailing).combined(with: .opacity)))
                 }
                 // Fullscreen takeover: the player covers chrome and content.
-                if case .player(let event, let channel, _) = store.sheet {
-                    PlayerView(event: event, channel: channel)
+                if case .player(let event, let channel, let clip, let picker) = store.sheet {
+                    PlayerView(event: event, channel: channel, clip: clip, startWithPicker: picker)
                         .environmentObject(store)
                         .environmentObject(store.settings)
                         .transition(.opacity)

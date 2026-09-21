@@ -595,26 +595,106 @@ struct TvSportCard: View {
 
 // MARK: - LIVE destination
 
-// MARK: - HIGHLIGHTS destination (finished games = recaps)
+// MARK: - HIGHLIGHTS destination (event-linked clips, mirrors HighlightsScreen)
 
 struct TvHighlights: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @FocusState private var focus: String?
-    private var recaps: [SportEvent] {
-        store.events.filter { $0.status == .finished }.prefix(30).map { $0 }
-    }
+    @State private var page = 0
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
-                ForEach(recaps) { event in
-                    TvLiveCard(event: event, focus: $focus)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("HIGHLIGHTS").font(.system(size: 11, weight: .bold)).tracking(1.5)
+                    .foregroundStyle(RallyTheme.rallyCyan)
+                Text("The biggest moments, right now.").font(.system(size: 27, weight: .black)).tracking(-0.6)
+                    .foregroundStyle(.white)
+                Text("Event-linked clips from supported leagues.").font(.system(size: 11))
+                    .foregroundStyle(RallyTheme.textSecondary)
             }
-            .padding(.horizontal, m.hPad).padding(.vertical, 14)
+            .padding(.horizontal, m.hPad).padding(.top, 12)
+            .frame(height: 74, alignment: .topLeading)
+            if store.highlights.isEmpty && !store.highlightsLoading {
+                HStack {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("RECENT COVERAGE").font(.system(size: 9, weight: .bold)).tracking(1.2)
+                            .foregroundStyle(RallyTheme.rallyCyan)
+                        Text("No league clips have been published yet.").font(.system(size: 22, weight: .black)).foregroundStyle(.white)
+                        Text("This page fills automatically as supported leagues release highlights.").font(.system(size: 11))
+                            .foregroundStyle(RallyTheme.textSecondary)
+                    }
+                    Spacer()
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, minHeight: 190, alignment: .leading)
+                .background(Color(red: 10/255, green: 16/255, blue: 27/255, opacity: 0.66))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
+                .padding(.horizontal, m.hPad).padding(.top, 16)
+            } else {
+                PagedShelf(title: nil as String?, items: store.highlights, pageSize: 4, aspect: 320.0 / 235.0,
+                           idFor: { $0.id }, focus: $focus, page: $page) { item, size, focus in
+                    TvHighlightCard(item: item, focus: focus, size: size)
+                }
+                .padding(.horizontal, m.hPad)
+            }
+            Spacer(minLength: 0)
         }
         .background { AmbientBackground() }
-        .overlay { if recaps.isEmpty { Text("No recaps yet").foregroundStyle(RallyTheme.textSecondary) } }
+        .overlay { if store.highlightsLoading && store.highlights.isEmpty { ProgressView() } }
+        .task { await store.refreshHighlights() }
+    }
+}
+
+struct TvHighlightCard: View {
+    var item: GameHighlight
+    var focus: FocusState<String?>.Binding
+    var size: CGSize?
+    @Environment(\.tvMetrics) private var m: TvMetrics
+    @EnvironmentObject var store: RallyStore
+    private var id: String { item.id }
+    var body: some View {
+        Button {
+            if item.clip.streamUrl != nil {
+                store.show(.player(event: item.event, channel: nil, clip: item.clip))
+            } else {
+                store.show(.eventDetail(item.event))
+            }
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                if let thumb = item.clip.thumbnailUrl, let link = URL(string: thumb) {
+                    AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fill) } placeholder: {
+                        Color(red: 10/255, green: 16/255, blue: 27/255, opacity: 0.76)
+                    }
+                } else {
+                    Color(red: 10/255, green: 16/255, blue: 27/255, opacity: 0.76)
+                }
+                LinearGradient(colors: [Color(red: 18/255, green: 0, blue: 0, opacity: 0.07),
+                                        Color(red: 77/255, green: 5/255, blue: 15/255, opacity: 0.3),
+                                        Color(red: 242/255, green: 5/255, blue: 15/255, opacity: 0.95)],
+                               startPoint: .top, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Artwork.displayLeague(item.event.league).uppercased())
+                        .font(.system(size: 10, weight: .bold)).tracking(1)
+                        .foregroundStyle(RallyTheme.rallyCyan)
+                    Text(item.clip.title).font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white).lineLimit(2)
+                    Text(item.event.name).font(.system(size: 11))
+                        .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
+                }
+                .padding(15)
+            }
+            .frame(width: (size ?? CGSize(width: 320, height: 235)).width,
+                   height: (size ?? CGSize(width: 320, height: 235)).height)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22),
+                        lineWidth: focus.wrappedValue == id ? 2 : 1))
+            .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+        }
+        .buttonStyle(.plain)
+        .focused(focus, equals: id)
     }
 }
 

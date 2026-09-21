@@ -238,7 +238,8 @@ struct PlayerView: View {
     @State private var lastMove = Date()
     let event: SportEvent?
     let channel: IptvChannel?
-
+    var clip: HighlightClip?
+    var startWithPicker = false
     var body: some View {
         Group {
             if gameMode {
@@ -259,7 +260,16 @@ struct PlayerView: View {
             host.wantsLayer = true
             if !started {
                 started = true
-                Task { await state.load(event: event, channel: channel, store: store, drawable: host) }
+                Task {
+                    await state.load(event: event, channel: channel, store: store, drawable: host)
+                    if let clip, clip.streamUrl != nil {
+                        await state.playClip(clip, store: store, drawable: host)
+                    }
+                    if startWithPicker {
+                        pickerVisible = true
+                        controlsVisible = true
+                    }
+                }
             }
         }
         .onDisappear {
@@ -348,6 +358,10 @@ struct PlayerView: View {
                     .foregroundStyle(RallyTheme.textSecondary)
             }
             HStack(spacing: 10) {
+                if event != nil {
+                    playerButton("Game View", primary: true) { gameMode = true }
+                }
+                playerButton("Fullscreen") { toggleFullscreen() }
                 Button(state.paused ? "▶" : "❚❚") { state.togglePause() }
                     .buttonStyle(.plain).font(.system(size: 13, weight: .bold))
                     .foregroundStyle(RallyTheme.textPrimary)
@@ -355,10 +369,6 @@ struct PlayerView: View {
                     .keyboardShortcut(.space, modifiers: [])
                 playerButton("Restart") {
                     Task { await state.restart(store: store, drawable: host) }
-                }
-                playerButton("Fullscreen") { toggleFullscreen() }
-                if event != nil {
-                    playerButton("Game View", primary: true) { gameMode = true }
                 }
                 playerButton("Sources") { pickerVisible = true }
                 playerButton("Diagnostics") { diagVisible.toggle() }

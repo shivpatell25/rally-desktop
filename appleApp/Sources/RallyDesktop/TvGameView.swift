@@ -317,22 +317,6 @@ extension PlayerView {
                 }
                 .padding(.horizontal, 18).padding(.top, 14)
                 Spacer()
-                if let event {
-                    HStack(spacing: 0) {
-                        cardTeam(name: event.awayTeam?.name, logo: event.awayTeam?.logoUrl).frame(maxWidth: .infinity)
-                        VStack(spacing: 4) {
-                            Text(scorePair(event)).font(.system(size: 44, weight: .black)).foregroundStyle(.white)
-                            Text(periodLine(event)).font(.system(size: 13, weight: .semibold)).tracking(0.6)
-                                .foregroundStyle(RallyTheme.textPrimary)
-                            Text(leadLine(event)).font(.system(size: 11, weight: .medium)).tracking(0.8)
-                                .foregroundStyle(RallyTheme.textSecondary)
-                        }
-                        .frame(width: 220)
-                        cardTeam(name: event.homeTeam?.name, logo: event.homeTeam?.logoUrl).frame(maxWidth: .infinity)
-                    }
-                    .padding(.horizontal, 30)
-                }
-                Spacer()
                 if state.paused {
                     Button { state.togglePause() } label: {
                         ZStack {
@@ -396,39 +380,6 @@ extension PlayerView {
             return "\(event.gameStatusDetail ?? state.positionText) / Live"
         }
         return state.positionText
-    }
-
-    private func scorePair(_ event: SportEvent) -> String {
-        if event.status == .live || event.status == .halftime || event.status == .finished {
-            return "\(event.scoreAway.map(String.init) ?? "–")  -  \(event.scoreHome.map(String.init) ?? "–")"
-        }
-        return "VS"
-    }
-
-    private func periodLine(_ event: SportEvent) -> String {
-        if event.status == .live || event.status == .halftime { return event.gameStatusDetail ?? "" }
-        if event.status == .finished { return "FINAL" }
-        return event.startTime.formatted(.dateTime.month(.abbreviated).day().hour().minute()).uppercased()
-    }
-
-    private func leadLine(_ event: SportEvent) -> String {
-        guard event.status == .live || event.status == .halftime,
-              let a = event.scoreAway, let h = event.scoreHome, a != h else { return "" }
-        let abbr = a > h ? event.awayTeam?.abbreviation : event.homeTeam?.abbreviation
-        return "\((abbr ?? "TEAM")) LEAD BY \(abs(a - h))"
-    }
-
-    private func cardTeam(name: String?, logo: String?) -> some View {
-        VStack(spacing: 6) {
-            if let logo, let link = URL(string: logo) {
-                AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
-                    Circle().fill(Color.white.opacity(0.1)).frame(width: 64, height: 64)
-                }
-                .frame(width: 64, height: 64)
-            }
-            Text(name?.uppercased() ?? "TBD").font(.system(size: 12, weight: .semibold)).tracking(0.8)
-                .foregroundStyle(.white).lineLimit(1)
-        }
     }
 
     private func switchEvent(_ new: SportEvent) {

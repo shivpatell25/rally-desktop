@@ -82,7 +82,7 @@ struct TvEventDetail: View {
                                 .foregroundStyle(.black).padding(.horizontal, 24).padding(.vertical, 10)
                                 .background(RallyTheme.offWhite).clipShape(RoundedRectangle(cornerRadius: 16))
                         }.buttonStyle(.plain)
-                        Button { store.show(.player(event: event, channel: nil)) } label: {
+                        Button { store.show(.player(event: event, channel: nil, picker: true)) } label: {
                             Text("Pick source").font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(RallyTheme.textPrimary).padding(.horizontal, 24).padding(.vertical, 10)
                                 .background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 16))
