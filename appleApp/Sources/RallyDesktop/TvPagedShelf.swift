@@ -58,6 +58,14 @@ struct PagedShelf<Item, Content: View>: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 20).onEnded { drag in
+                if drag.translation.width < -60 {
+                    turn(1)
+                } else if drag.translation.width > 60 {
+                    turn(-1)
+                }
+            })
         }
         .onMoveCommand { dir in
             switch dir {
