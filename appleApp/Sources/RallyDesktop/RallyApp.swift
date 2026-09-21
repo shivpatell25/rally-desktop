@@ -25,6 +25,7 @@ final class RallyStore: ObservableObject {
     @Published var events: [SportEvent] = []
     @Published var isLoading = false
     @Published var addonManifests: [String: StremioManifest] = [:]
+    @Published var pendingLeague: String?
     @Published var update: RallyRelease?
     @Published var channels: [IptvChannel] = []
     @Published var connectionStatus: String?
@@ -89,38 +90,18 @@ final class RallyStore: ObservableObject {
 
 struct ContentView: View {
     @EnvironmentObject var store: RallyStore
+    @State private var destination: TvDestination = .home
+    @State private var showingSearch = false
+    @State private var showingSettings = false
     var body: some View {
-        NavigationSplitView {
-            List(selection: $store.tab) {
-                Section("Browse") {
-                    Label("Home", systemImage: "house").tag(RallyTab.home)
-                    Label("Leagues", systemImage: "trophy").tag(RallyTab.leagues)
-                    Label("Search", systemImage: "magnifyingglass").tag(RallyTab.search)
-                    Label("Settings", systemImage: "gear").tag(RallyTab.settings)
-                }
-                if !store.addonManifests.isEmpty {
-                    Section("Addons") {
-                        ForEach(store.addonManifests.sorted(by: { $0.key < $1.key }), id: \.key) { _, man in
-                            VStack(alignment: .leading) {
-                                Text(man.name ?? "Stremio").font(.headline)
-                                Text("v\(man.version ?? "?")").font(.caption).foregroundStyle(RallyTheme.textTertiary)
-                            }
-                        }
-                    }
-                }
-                if let rel = store.update {
-                    Section("Update") {
-                        Text("v\(rel.tag) available").foregroundStyle(RallyTheme.rallyLime)
-                    }
-                }
-            }
-            .navigationTitle("Rally")
-        } detail: {
-            switch store.tab {
-            case .home: HomeView()
+        VStack(spacing: 0) {
+            RallyTopBar(destination: $destination, onSearch: { showingSearch = true }, onSettings: { showingSettings = true })
+            switch destination {
+            case .home: TvHomeDashboard(destination: $destination)
+            case .live: TvLiveRow()
             case .leagues: LeaguesView()
-            case .search: SearchView()
-            case .settings: SettingsView()
+            case .highlights: TvHighlights()
+            case .myTeams: TvMyTeams()
             }
         }
         .background(RallyTheme.background)
@@ -142,6 +123,18 @@ struct ContentView: View {
                 .environmentObject(store)
                 .environmentObject(store.settings)
                 .frame(minWidth: 900, minHeight: 600)
+        }
+        .sheet(isPresented: $showingSearch) {
+            SearchView()
+                .environmentObject(store)
+                .environmentObject(store.settings)
+                .frame(minWidth: 700, minHeight: 500)
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+                .environmentObject(store)
+                .environmentObject(store.settings)
+                .frame(minWidth: 700, minHeight: 550)
         }
     }
 }

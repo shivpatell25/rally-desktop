@@ -17,7 +17,8 @@ let package = Package(
         .target(
             name: "RallyCore",
             dependencies: [.product(name: "VLCKit", package: "vlckit")],
-            path: "Sources/RallyCore"
+            path: "Sources/RallyCore",
+            resources: [.copy("Resources")]
         ),
         .executableTarget(
             name: "RallyDesktop",

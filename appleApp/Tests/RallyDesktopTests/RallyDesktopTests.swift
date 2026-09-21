@@ -185,4 +185,18 @@ final class RallyDesktopTests: XCTestCase {
         XCTAssertEqual(cands.count, 1)
         XCTAssertEqual(cands[0].channel?.id, "1")
     }
+
+    func testArtworkMapping() {
+        let mlb = SportEvent(id: "1", name: "x", startTime: Date(), status: .live,
+            sport: "baseball", league: "MLB")
+        XCTAssertEqual(Artwork.heroBackdrop(event: mlb), "hero_landscape_baseball_rally")
+        XCTAssertEqual(Artwork.shelfBackdrop(event: mlb), "card_editorial_baseball_tv")
+        XCTAssertEqual(Artwork.leagueMark(league: "NFL"), "league_mark_nfl")
+        XCTAssertNil(Artwork.leagueMark(league: "NCAAF"))
+        XCTAssertEqual(Artwork.leagueShortMark(league: "NCAAB"), "CBB")
+        XCTAssertEqual(Artwork.displayLeague("eng.1"), "Premier League")
+        XCTAssertEqual(Artwork.displayLeague("ncaaf"), "College Football")
+        XCTAssertNotNil(Artwork.artURL("rally_wordmark"))
+        XCTAssertNotNil(Artwork.artURL("hero_landscape_football_rally"))
+    }
 }

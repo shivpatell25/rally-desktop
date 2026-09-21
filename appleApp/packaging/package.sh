@@ -25,7 +25,8 @@ for FW in VLCKit Sparkle; do
     rm -rf "$CONTENTS/Frameworks/$FW.framework.dSYM"
 done
 rm -rf "$CONTENTS/Frameworks/Sparkle.framework/Versions/B/XPCServices/"*.dSYM 2>/dev/null || true
-
+# SPM resource bundle (TV artwork) — Bundle.module resolves it from Resources.
+cp -R .build/release/RallyDesktop_RallyCore.bundle "$CONTENTS/Resources/"
 # Icon from the brand kit (1024 master -> .icns).
 ICONSET="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "$ICONSET"
