@@ -20,16 +20,31 @@ $out = Join-Path $root "dist\$rid"
 $zip = Join-Path $root "dist\Rally-$Version-Windows-$Arch.zip"
 
 Write-Host "Publishing Rally.App $Version ($rid)..."
-dotnet publish (Join-Path $root "src\Rally.App\Rally.App.csproj") `
-    -c Release -r $rid --self-contained `
-    -p:Version=$Version -o $out
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
+# NOTE: dotnet publish cannot resolve the WinAppSDK PRI tasks (ExpandPriContent
+# lives under the VS AppxPackage targets). Publish through VS MSBuild, which CI
+# provides via setup-msbuild and dev boxes via VS Build Tools / Community.
+function Find-MsBuild {
+    $cmd = Get-Command msbuild -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $found = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+            -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+        if ($found) { return $found }
+    }
+    return $null
+}
+$msbuild = Find-MsBuild
+if (-not $msbuild) { throw "MSBuild not found (install VS Build Tools with the .NET + WinAppSDK workloads)" }
+$proj = Join-Path $root "src\Rally.App\Rally.App.csproj"
+& $msbuild $proj /t:Publish /p:Configuration=Release /p:RuntimeIdentifier=$rid `
+    /p:SelfContained=true /p:Version=$Version "/p:PublishDir=$out\" /restore
+if ($LASTEXITCODE -ne 0) { throw "msbuild publish failed" }
 
 $exe = Join-Path $out "Rally.App.exe"
 if (-not (Test-Path $exe)) { throw "expected exe missing: $exe" }
 
 if ($SelfSign) {
-    Write-Host "Creating self-signed cert (CurrentUser\My)..."
     $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=Rally" `
         -KeyUsage DigitalSignature -FriendlyName "Rally side-load" `
         -CertStoreLocation "Cert:\CurrentUser\My" `
