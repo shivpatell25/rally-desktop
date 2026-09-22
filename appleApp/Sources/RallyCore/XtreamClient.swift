@@ -18,10 +18,12 @@ public final class XtreamClient: @unchecked Sendable {
     private static let channelTTL: TimeInterval = 15 * 60
     private static let guideTTL: TimeInterval = 2 * 60
     private static let authTTL: TimeInterval = 5 * 60
+    private let channelDisk: ChannelDiskStore
 
-    public init(session: URLSession = .shared, settings: SettingsStore) {
+    public init(session: URLSession = .shared, settings: SettingsStore, cacheDirectory: URL? = nil) {
         self.session = session
         self.settings = settings
+        self.channelDisk = ChannelDiskStore(directory: cacheDirectory)
     }
 
     struct Account: Equatable {
@@ -87,10 +89,21 @@ public final class XtreamClient: @unchecked Sendable {
         if lock.withLock({ cacheIdentity == a.identity && !cachedChannels.isEmpty && now.timeIntervalSince(cachedAt) < Self.channelTTL }) {
             return lock.withLock { cachedChannels }
         }
-        guard await authenticate() else {
-            return lock.withLock { cacheIdentity == a.identity ? cachedChannels : [] }
+        if lock.withLock({ cachedChannels.isEmpty }),
+           let disk = channelDisk.loadFresh(identity: a.identity), !disk.isEmpty {
+            lock.withLock { cachedChannels = disk; cachedAt = Date(); cacheIdentity = a.identity }
+            return disk
         }
-        return await fetchChannels(a)
+        guard await authenticate() else {
+            let memory = lock.withLock { cacheIdentity == a.identity ? cachedChannels : [] }
+            return memory.isEmpty ? (channelDisk.loadAny(identity: a.identity) ?? []) : memory
+        }
+        let fresh = await fetchChannels(a)
+        if fresh.isEmpty {
+            let memory = lock.withLock { cachedChannels }
+            return memory.isEmpty ? (channelDisk.loadAny(identity: a.identity) ?? []) : memory
+        }
+        return fresh
     }
 
     public func refreshChannels() async -> [IptvChannel] {
@@ -119,6 +132,7 @@ public final class XtreamClient: @unchecked Sendable {
             )
         }.uniquified()
         lock.withLock { cachedChannels = channels; cachedAt = Date(); cacheIdentity = a.identity }
+        if !channels.isEmpty { channelDisk.save(channels, identity: a.identity) }
         return channels
     }
 

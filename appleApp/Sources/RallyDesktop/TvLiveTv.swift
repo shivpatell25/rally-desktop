@@ -9,7 +9,11 @@ struct TvLiveTv: View {
     @State private var query = ""
     @State private var guides: [String: ChannelGuide] = [:]
     @State private var loadingGuides = false
+    @State private var inflight: Set<String> = []
     @FocusState private var focus: String?
+    // EPG fan-out bound (Android Semaphore(4)): at most 4 concurrent guide
+    // fetches no matter how fast the user scrolls.
+    private let guideSemaphore = AsyncSemaphore(limit: 4)
 
     private var filtered: [IptvChannel] {
         guard !query.isEmpty else { return store.channels }
@@ -45,6 +49,7 @@ struct TvLiveTv: View {
                     LazyVStack(spacing: 8) {
                         ForEach(filtered.prefix(120)) { channel in
                             channelRow(channel)
+                                .onAppear { Task { await loadGuide(for: channel) } }
                         }
                     }
                     .padding(.horizontal, m.hPad).padding(.bottom, 20)
@@ -105,17 +110,44 @@ struct TvLiveTv: View {
     }
 
     private func loadGuides() async {
-        let targets = Array(store.channels.prefix(40))
+        // Eager kick for the first screenful only; the rest load lazily as
+        // rows appear (rows past the old prefix(40) wall now get guides too).
+        let targets = Array(store.channels.prefix(12))
         guard !targets.isEmpty else { return }
         loadingGuides = true
         defer { loadingGuides = false }
-        await withTaskGroup(of: (String, ChannelGuide?).self) { group in
+        await withTaskGroup(of: Void.self) { group in
             for ch in targets {
-                group.addTask { (ch.id, await store.guide(for: ch)) }
-            }
-            for await (id, guide) in group {
-                if let guide { guides[id] = guide }
+                group.addTask { await loadGuide(for: ch) }
             }
         }
+    }
+
+    /// Deduped per-row load: concurrent onAppear events for the same row
+    /// collapse into one fetch instead of stampeding the portal.
+    private func loadGuide(for channel: IptvChannel) async {
+        if guides[channel.id] != nil || channel.guide != nil { return }
+        guard !inflight.contains(channel.id) else { return }
+        inflight.insert(channel.id)
+        defer { inflight.remove(channel.id) }
+        await guideSemaphore.wait()
+        let guide = await store.guide(for: channel)
+        await guideSemaphore.signal()
+        if let guide { guides[channel.id] = guide }
+    }
+}
+
+/// Tiny async semaphore (bounds concurrent portal calls).
+private actor AsyncSemaphore {
+    private var count = 0
+    private let limit: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    init(limit: Int) { self.limit = limit }
+    func wait() async {
+        if count < limit { count += 1; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func signal() {
+        if waiters.isEmpty { count -= 1 } else { waiters.removeFirst().resume() }
     }
 }

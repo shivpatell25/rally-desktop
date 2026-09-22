@@ -5,6 +5,13 @@ import SwiftUI
 @main
 struct RallyApp: App {
     @StateObject private var store = RallyStore()
+
+    init() {
+        // Bounded artwork cache (mirrors CoilModule budgets): repeat badge
+        // scrolls hit memory/disk instead of re-downloading short-TTL art.
+        URLCache.shared = URLCache(memoryCapacity: 32 * 1024 * 1024,
+                                    diskCapacity: 128 * 1024 * 1024)
+    }
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -114,9 +121,18 @@ final class RallyStore: ObservableObject {
         return (s, x)
     }
 
+    private var refreshing = false
+    private let scheduleStore = ScheduleStore()
+
     func refresh() async {
+        // Coalesce overlapping refresh triggers (one slow portal must not
+        // stack concurrent full-fan-out reloads).
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false; isLoading = false }
         isLoading = true
-        defer { isLoading = false }
+        // Instant paint from last-known-good before the network resolves.
+        if events.isEmpty, let cached = scheduleStore.loadFresh() { events = cached }
         async let board = espn.fetchAllLeagues()
         let addons = settings.stremioAddonUrls
         let manifests = await withTaskGroup(of: (String, StremioManifest?).self) { group in
@@ -127,7 +143,14 @@ final class RallyStore: ObservableObject {
             for await (url, man) in group { if let man { out[url] = man } }
             return out
         }
-        self.events = await board
+        let fresh = await board
+        if !fresh.isEmpty {
+            events = fresh
+            scheduleStore.save(fresh)
+        } else if events.isEmpty {
+            // Offline/DNS outage: stale schedule beats an empty shelf.
+            events = scheduleStore.loadAny() ?? []
+        }
         self.addonManifests = manifests
     }
 

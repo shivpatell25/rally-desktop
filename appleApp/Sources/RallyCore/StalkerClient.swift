@@ -18,10 +18,12 @@ public final class StalkerClient: @unchecked Sendable {
 
     private static let channelTTL: TimeInterval = 15 * 60
     private static let guideTTL: TimeInterval = 2 * 60
+    private let channelDisk: ChannelDiskStore
 
-    public init(session: URLSession = .shared, settings: SettingsStore) {
+    public init(session: URLSession = .shared, settings: SettingsStore, cacheDirectory: URL? = nil) {
         self.session = session
         self.settings = settings
+        self.channelDisk = ChannelDiskStore(directory: cacheDirectory)
     }
 
     // MARK: - Auth
@@ -84,14 +86,29 @@ public final class StalkerClient: @unchecked Sendable {
         if let c = lock.withLock({ channels }), Date().timeIntervalSince(c.at) < Self.channelTTL, !c.channels.isEmpty {
             return c.channels
         }
-        if await token().isEmpty, !(await authenticate()) { return lock.withLock { channels?.channels ?? [] } }
+        let identity = await diskIdentity()
+        if lock.withLock({ channels?.channels.isEmpty != false }),
+           let disk = channelDisk.loadFresh(identity: identity), !disk.isEmpty {
+            // Instant catalog from disk; the 15-min memory TTL still bounds staleness.
+            lock.withLock { channels = CachedChannels(channels: disk, at: Date()) }
+            return disk
+        }
+        if await token().isEmpty, !(await authenticate()) {
+            let memory = lock.withLock { channels?.channels ?? [] }
+            return memory.isEmpty ? (channelDisk.loadAny(identity: identity) ?? []) : memory
+        }
         var fresh = await fetchChannels()
         if fresh.isEmpty {
             _ = await authenticate(force: true)
             fresh = await fetchChannels()
         }
-        if !fresh.isEmpty { lock.withLock { channels = CachedChannels(channels: fresh, at: Date()) } }
-        return fresh.isEmpty ? lock.withLock({ channels?.channels ?? [] }) : fresh
+        if !fresh.isEmpty {
+            lock.withLock { channels = CachedChannels(channels: fresh, at: Date()) }
+            channelDisk.save(fresh, identity: identity)
+            return fresh
+        }
+        let memory = lock.withLock { channels?.channels ?? [] }
+        return memory.isEmpty ? (channelDisk.loadAny(identity: identity) ?? []) : memory
     }
 
     public func refreshChannels() async -> [IptvChannel] {
@@ -332,8 +349,12 @@ public final class StalkerClient: @unchecked Sendable {
         return out
     }
 
+    private func diskIdentity() async -> String {
+        "\(await portal().lowercased())|\(await mac().uppercased())"
+    }
+
     private func ensureOwner() async {
-        let identity = "\(await portal().lowercased())|\(await mac().uppercased())"
+        let identity = await diskIdentity()
         let current: String = await MainActor.run { settings.channelCacheIdentity }
         if current != identity {
             lock.withLock { channels = nil; guides.removeAll() }
