@@ -37,7 +37,7 @@
                                 </TextBlock>
                                 <Button Content="View event" Tag="{Binding Event}" Click="EventButton_Click" />
                             </StackPanel>
-                        </DataTemplate>
+                        </StackPanel>
                     </DataTemplate>
                 </GridView.ItemTemplate>
             </GridView>
