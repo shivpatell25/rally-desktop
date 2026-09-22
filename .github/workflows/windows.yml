@@ -31,4 +31,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Rally-Windows-x64
-          path: dist/Rally-*-Windows-*.zip
+          # NOTE: uses: steps ignore defaults.run.working-directory — path from repo root.
+          path: windowsApp/dist/Rally-*-Windows-*.zip
