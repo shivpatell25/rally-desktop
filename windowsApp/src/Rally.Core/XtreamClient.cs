@@ -73,8 +73,26 @@ public sealed class XtreamClient(HttpClient http, SettingsStore settings)
         if (a is null) return [];
         if (_identity == a.Identity && _channels.Count > 0 && DateTimeOffset.UtcNow - _channelsAt < ChannelTtl)
             return _channels;
-        if (!await AuthenticateAsync(ct)) return _identity == a.Identity ? _channels : [];
-        return await FetchChannelsAsync(a, ct);
+        var disk = new ChannelDiskStore(settings.CacheDirectory);
+        if (_channels.Count == 0)
+        {
+            var cached = disk.LoadFresh(a.Identity);
+            if (cached is not null)
+            {
+                _channels = cached; _channelsAt = DateTimeOffset.UtcNow; _identity = a.Identity;
+                return cached;
+            }
+        }
+        if (!await AuthenticateAsync(ct))
+        {
+            if (_identity == a.Identity && _channels.Count > 0) return _channels;
+            return disk.LoadAny(a.Identity) ?? [];
+        }
+        var fresh = await FetchChannelsAsync(a, ct);
+        if (fresh.Count > 0) disk.Save(fresh, a.Identity);
+        if (fresh.Count > 0) return fresh;
+        if (_channels.Count > 0) return _channels;
+        return disk.LoadAny(a.Identity) ?? [];
     }
 
     public async Task<List<IptvChannel>> RefreshChannelsAsync(CancellationToken ct = default)
@@ -111,6 +129,7 @@ public sealed class XtreamClient(HttpClient http, SettingsStore settings)
         _channels = channels;
         _channelsAt = DateTimeOffset.UtcNow;
         _identity = a.Identity;
+        if (channels.Count > 0) new ChannelDiskStore(settings.CacheDirectory).Save(channels, a.Identity);
         return channels;
     }
 

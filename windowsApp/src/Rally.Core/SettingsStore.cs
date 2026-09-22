@@ -27,6 +27,8 @@ public sealed class SettingsStore
         Load();
     }
 
+    public string CacheDirectory => Path.Combine(_dir, "cache");
+
     public IptvProvider IptvProvider
     {
         get => Enum.TryParse<IptvProvider>(Str("iptv_provider"), out var p) ? p : IptvProvider.Stalker;

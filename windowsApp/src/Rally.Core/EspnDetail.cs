@@ -143,6 +143,46 @@ public sealed class EspnDetail(HttpClient http)
         return new GameDetail(leaders, clips, tables, comparisons, broadcasts.Distinct().ToList());
     }
 
+    public async Task<List<Team>> FetchTeamsAsync(string sport, string league, CancellationToken ct = default)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams");
+            req.Headers.UserAgent.ParseAdd("Rally/Windows");
+            using var res = await http.SendAsync(req, ct).ConfigureAwait(false);
+            res.EnsureSuccessStatusCode();
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+            return ParseTeams(doc.RootElement);
+        }
+        catch { return []; }
+    }
+
+    internal static List<Team> ParseTeams(JsonElement root)
+    {
+        var out_ = new List<Team>();
+        var sports = root.GetPropertyOrNull("sports")?.EnumerateArray().ToList()
+            ?? (root.GetPropertyOrNull("leagues") is not null ? [root] : []);
+        foreach (var s in sports)
+        {
+            foreach (var l in s.GetPropertyOrNull("leagues")?.EnumerateArray() ?? [])
+            {
+                foreach (var entry in l.GetPropertyOrNull("teams")?.EnumerateArray() ?? [])
+                {
+                    var t = entry.GetPropertyOrNull("team");
+                    if (t is null) continue;
+                    var logos = t?.GetPropertyOrNull("logos")?.EnumerateArray().ToList();
+                    out_.Add(new Team(
+                        t?.GetPropertyOrNull("id")?.GetString() ?? Guid.NewGuid().ToString(),
+                        t?.GetPropertyOrNull("displayName")?.GetString() ?? t?.GetPropertyOrNull("name")?.GetString() ?? "?",
+                        t?.GetPropertyOrNull("abbreviation")?.GetString() ?? t?.GetPropertyOrNull("shortName")?.GetString() ?? "?",
+                        logos?.FirstOrDefault().GetPropertyOrNull("href")?.GetString() ?? t?.GetPropertyOrNull("logo")?.GetString()));
+                }
+            }
+        }
+        return out_.DistinctBy(t => t.Id).ToList();
+    }
+
     public async Task<List<StandingRow>> FetchStandingsAsync(string sport, string league, CancellationToken ct = default)
     {
         try

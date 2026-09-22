@@ -142,6 +142,34 @@ public sealed partial class SettingsPage : Page
         catch { TeamsStatus.Text = "Lookup failed — check connection and retry"; }
     }
 
+    private async void BrowseClubs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        var league = TeamLeague.SelectedItem as string ?? "";
+        if (league.Length == 0) { CatalogStatus.Text = "Pick a league first"; return; }
+        CatalogStatus.Text = "Loading clubs…";
+        try
+        {
+            var meta = EspnClient.Leagues.First(l => l.League == league);
+            var detail = new EspnDetail(new HttpClient());
+            var teams = await detail.FetchTeamsAsync(meta.Sport, meta.Path).ConfigureAwait(false);
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                CatalogList.ItemsSource = teams;
+                CatalogStatus.Text = teams.Count == 0 ? "No clubs found — check connection and retry" : $"{teams.Count} clubs — select one to star it";
+            });
+        }
+        catch { DispatcherQueue.TryEnqueue(() => CatalogStatus.Text = "Lookup failed — check connection and retry"); }
+    }
+
+    private void Catalog_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CatalogList.SelectedItem is not Team team) return;
+        CatalogList.SelectedItem = null;
+        var league = TeamLeague.SelectedItem as string ?? "";
+        var added = _settings.ToggleFavoriteTeam(new FavoriteTeam(team.Id, league, team.Name, team.Abbreviation, team.LogoUrl));
+        CatalogStatus.Text = added ? $"Added {team.Name}" : $"Removed {team.Name}";
+        RefreshFavorites();
+    }
     private void RemoveTeam_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
         var key = (sender as Microsoft.UI.Xaml.Controls.Button)?.Tag as string;

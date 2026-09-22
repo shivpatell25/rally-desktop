@@ -86,7 +86,8 @@ public sealed partial class TeamHubPage : Page
                 : Task.FromResult<List<InjuryEntry>>([]);
             await Task.WhenAll(scheduleTask, standingsTask, rosterTask, injuriesTask).ConfigureAwait(false);
             var schedule = scheduleTask.Result
-                .Where(e => e.HomeTeam?.Id == team.Id || e.AwayTeam?.Id == team.Id)
+                .Where(e => e.League == team.League &&
+                    (e.HomeTeam?.Id == team.Id || e.AwayTeam?.Id == team.Id))
                 .OrderBy(e => e.StartTime)
                 .ToList();
             var standing = standingsTask.Result.FirstOrDefault(r => r.TeamId == team.Id)

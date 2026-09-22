@@ -82,16 +82,29 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
     {
         EnsureOwner();
         if (_channels.Count > 0 && DateTimeOffset.UtcNow - _channelsAt < ChannelTtl) return _channels;
+        var disk = new ChannelDiskStore(settings.CacheDirectory);
+        var identity = settings.ChannelCacheIdentity;
+        if (_channels.Count == 0)
+        {
+            // Instant catalog from disk; the 15-min memory TTL still bounds staleness.
+            var cached = disk.LoadFresh(identity);
+            if (cached is not null) { _channels = cached; _channelsAt = DateTimeOffset.UtcNow; return cached; }
+        }
         if (string.IsNullOrEmpty(settings.AuthToken) && !await AuthenticateAsync(false, ct))
-            return _channels;
+        {
+            if (_channels.Count > 0) return _channels;
+            return disk.LoadAny(identity) ?? [];
+        }
         var fresh = await FetchChannelsAsync(ct);
         if (fresh.Count == 0)
         {
             await AuthenticateAsync(true, ct);
             fresh = await FetchChannelsAsync(ct);
         }
-        if (fresh.Count > 0) { _channels = fresh; _channelsAt = DateTimeOffset.UtcNow; }
-        return fresh.Count > 0 ? fresh : _channels;
+        if (fresh.Count > 0) { _channels = fresh; _channelsAt = DateTimeOffset.UtcNow; disk.Save(fresh, identity); }
+        if (fresh.Count > 0) return fresh;
+        if (_channels.Count > 0) return _channels;
+        return disk.LoadAny(identity) ?? [];
     }
 
     public async Task<List<IptvChannel>> RefreshChannelsAsync(CancellationToken ct = default)

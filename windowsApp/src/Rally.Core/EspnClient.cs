@@ -4,8 +4,9 @@ using System.Text.Json;
 // ESPN scoreboard client. Base + league map mirror DataModule/EspnRepositoryImpl.
 namespace Rally.Core;
 
-public sealed class EspnClient(HttpClient http)
+public sealed class EspnClient(HttpClient http, string? cacheDir = null)
 {
+    private readonly ScheduleStore _schedule = new(cacheDir);
     public const string BaseUrl = "https://site.api.espn.com/apis/site/v2/";
 
     public static readonly (string League, string Sport, string Path)[] Leagues =
@@ -25,9 +26,16 @@ public sealed class EspnClient(HttpClient http)
 
     public async Task<List<SportEvent>> FetchAllAsync(int limit = 100, CancellationToken ct = default)
     {
-        var tasks = Leagues.Select(l => FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct));
-        var results = await Task.WhenAll(tasks);
-        return results.SelectMany(x => x).OrderBy(e => e.StartTime).ToList();
+        List<SportEvent> fresh = [];
+        try
+        {
+            var tasks = Leagues.Select(l => FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct));
+            var results = await Task.WhenAll(tasks);
+            fresh = results.SelectMany(x => x).OrderBy(e => e.StartTime).ToList();
+        }
+        catch { /* offline: fall through to disk below */ }
+        if (fresh.Count > 0) { _schedule.Save(fresh); return fresh; }
+        return _schedule.LoadFresh() ?? _schedule.LoadAny() ?? [];
     }
 
     public async Task<List<SportEvent>> FetchScoreboardAsync(string sport, string league, string domainLeague, int limit = 100, string? dates = null, CancellationToken ct = default)

@@ -12,6 +12,7 @@ public sealed partial class HomePage : Page
     private readonly EspnClient _espn = new(new HttpClient());
     private readonly SettingsStore _settings = new();
     private readonly AppNotifications _notifications;
+    private int _refreshing;
 
     public HomePage()
     {
@@ -28,6 +29,17 @@ public sealed partial class HomePage : Page
     private async void Retry_Click(object sender, RoutedEventArgs e) => await RefreshAsync().ConfigureAwait(false);
 
     private async Task RefreshAsync()
+    {
+        // Coalesce overlapping triggers (one slow ESPN round must not stack reloads).
+        if (System.Threading.Interlocked.Exchange(ref _refreshing, 1) == 1) return;
+        try
+        {
+            await RefreshCoreAsync().ConfigureAwait(false);
+        }
+        finally { System.Threading.Interlocked.Exchange(ref _refreshing, 0); }
+    }
+
+    private async Task RefreshCoreAsync()
     {
         DispatcherQueue.TryEnqueue(() =>
         {

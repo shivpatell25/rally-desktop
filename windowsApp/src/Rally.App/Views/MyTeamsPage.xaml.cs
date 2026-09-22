@@ -34,11 +34,13 @@ public sealed partial class MyTeamsPage : Page
         try
         {
             var teams = _settings.FavoriteTeamProfiles;
-            var ids = teams.Select(t => t.Id).ToHashSet();
+            // League-scoped: bare ESPN ids repeat across leagues (id 1 is
+            // Falcons, Orioles, and Bruins in different leagues).
+            var keys = teams.Select(t => t.Key).ToHashSet();
             var events = await _espn.FetchAllAsync().ConfigureAwait(false);
             var mine = events
-                .Where(e => (e.HomeTeam?.Id is string h && ids.Contains(h))
-                    || (e.AwayTeam?.Id is string a && ids.Contains(a)))
+                .Where(e => (e.HomeTeam?.Id is string h && keys.Contains($"{e.League}:{h}"))
+                    || (e.AwayTeam?.Id is string a && keys.Contains($"{e.League}:{a}")))
                 .OrderBy(e => e.StartTime)
                 .ToList();
             DispatcherQueue.TryEnqueue(() =>
