@@ -18,12 +18,58 @@
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Content="Test connection" Click="Test_Click" />
                 <Button Content="Save" Click="Save_Click" />
-                <TextBlock x:Name="Status" VerticalAlignment="Center" Opacity="0.7" />
+                <TextBlock x:Name="Status" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
             </StackPanel>
             <TextBlock Text="Stremio addons (one per line)" FontWeight="SemiBold" />
             <TextBox x:Name="Addons" AcceptsReturn="True" MinHeight="80" />
             <TextBlock Text="HTTP portals work for legacy providers but can be intercepted — prefer HTTPS."
                 Opacity="0.6" TextWrapping="Wrap" />
+
+            <TextBlock Text="My Teams" FontSize="20" FontWeight="SemiBold" Margin="0,12,0,0" />
+            <ListView x:Name="FavoritesList" SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center">
+                                <Run Text="{Binding Name}" FontWeight="SemiBold" /><Run Text=" · " /><Run Text="{Binding League}" />
+                            </TextBlock>
+                            <Button Grid.Column="1" Content="Remove" Click="RemoveTeam_Click" Tag="{Binding Key}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <ComboBox x:Name="TeamLeague" Header="League" />
+            <TextBox x:Name="TeamName" Header="Add team by name" PlaceholderText="e.g. Dallas Cowboys" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Add team" Click="AddTeam_Click" />
+                <TextBlock x:Name="TeamsStatus" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
+            </StackPanel>
+            <TextBlock Text="Pick the league first, then type the team name — Rally matches it against that league's standings."
+                Opacity="0.6" TextWrapping="Wrap" />
+
+            <TextBlock Text="Alerts" FontSize="20" FontWeight="SemiBold" Margin="0,12,0,0" />
+            <ToggleSwitch x:Name="LiveAlerts" Header="Game alerts (kickoff, score, final)" Toggled="Alerts_Toggled" />
+            <ToggleSwitch x:Name="RedZoneAlerts" Header="RedZone touchdown alerts" Toggled="Alerts_Toggled" />
+
+            <TextBlock Text="Viewing" FontSize="20" FontWeight="SemiBold" Margin="0,12,0,0" />
+            <ToggleSwitch x:Name="LowLatency" Header="Low latency" Toggled="Viewing_Toggled" />
+            <ToggleSwitch x:Name="AdaptiveQuality" Header="Adaptive quality" Toggled="Viewing_Toggled" />
+            <ToggleSwitch x:Name="AudioNormalization" Header="Audio normalization" Toggled="Viewing_Toggled" />
+            <ToggleSwitch x:Name="ReducedMotion" Header="Reduced motion" Toggled="Viewing_Toggled" />
+            <ToggleSwitch x:Name="LargeText" Header="Large text" Toggled="Viewing_Toggled" />
+
+            <TextBlock Text="Support" FontSize="20" FontWeight="SemiBold" Margin="0,12,0,0" />
+            <TextBlock x:Name="VersionText" Opacity="0.7" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Check for updates" Click="CheckUpdates_Click" />
+                <Button Content="Clear credentials" Click="ClearCredentials_Click" />
+            </StackPanel>
+            <TextBlock x:Name="UpdateStatus" TextWrapping="Wrap" Opacity="0.8" />
+            <TextBlock x:Name="UpdateNotes" TextWrapping="Wrap" Opacity="0.6" MaxHeight="200" />
         </StackPanel>
     </ScrollViewer>
 </Page>

@@ -8,6 +8,11 @@
         SelectionChanged="Nav_SelectionChanged" Background="{StaticResource RallyBackground}">
         <controls:NavigationView.MenuItems>
             <controls:NavigationViewItem Content="Home" Tag="home" Icon="Home" />
+            <controls:NavigationViewItem Content="Live TV" Tag="live" Icon="Play" />
+            <controls:NavigationViewItem Content="Leagues" Tag="leagues" Icon="Library" />
+            <controls:NavigationViewItem Content="Highlights" Tag="highlights" Icon="Video" />
+            <controls:NavigationViewItem Content="My Teams" Tag="myteams" Icon="People" />
+            <controls:NavigationViewItem Content="Search" Tag="search" Icon="Find" />
             <controls:NavigationViewItem Content="Multi-View" Tag="multi" Icon="ViewAll" />
             <controls:NavigationViewItem Content="Settings" Tag="settings" Icon="Setting" />
         </controls:NavigationView.MenuItems>

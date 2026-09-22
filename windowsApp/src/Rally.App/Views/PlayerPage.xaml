@@ -15,10 +15,16 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <vlc:VideoView x:Name="Video" />
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
-                <Button Content="Pause" Click="Pause_Click" />
-                <Button Content="Retry" Click="Retry_Click" />
-                <TextBlock x:Name="NowPlaying" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
+            <StackPanel Grid.Row="1" Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Pause" Click="Pause_Click" />
+                    <Button Content="Restart" Click="Restart_Click" />
+                    <Button Content="Retry" Click="Retry_Click" />
+                    <ProgressRing x:Name="Loading" IsActive="False" Width="20" Height="20" />
+                    <TextBlock x:Name="NowPlaying" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
+                </StackPanel>
+                <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="{StaticResource RallyLive}" Visibility="Collapsed" />
+                <TextBlock x:Name="Diagnostics" TextWrapping="Wrap" FontSize="12" Opacity="0.7" />
             </StackPanel>
         </Grid>
         <StackPanel Grid.Column="1" Spacing="8">
@@ -26,7 +32,14 @@
             <ListView x:Name="Sources" SelectionMode="Single" SelectionChanged="Sources_SelectionChanged">
                 <ListView.ItemTemplate>
                     <DataTemplate>
-                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap" />
+                        <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Note}" FontSize="12" Opacity="0.8" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{Binding Evidence}" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding VerifiedText}" FontSize="12" Foreground="{StaticResource RallyLime}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>

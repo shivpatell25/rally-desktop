@@ -6,24 +6,17 @@
     <Grid Padding="20" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <StackPanel Orientation="Horizontal" Spacing="12">
             <TextBlock Text="Rally" FontSize="28" FontWeight="Bold" />
             <ProgressRing x:Name="Spinner" IsActive="False" Width="24" Height="24" />
+            <Button x:Name="RetryButton" Content="Retry" Click="Retry_Click" Visibility="Collapsed" />
         </StackPanel>
-        <ListView x:Name="Events" Grid.Row="1" SelectionMode="Single"
-            SelectionChanged="Events_SelectionChanged">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
-                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <TextBlock FontSize="12" Opacity="0.7">
-                            <Run Text="{Binding League}" /><Run Text=" · " /><Run Text="{Binding StatusText}" />
-                        </TextBlock>
-                    </StackPanel>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
+        <TextBlock x:Name="ErrorText" Grid.Row="1" Opacity="0.7" TextWrapping="Wrap" Visibility="Collapsed" />
+        <ScrollViewer Grid.Row="2">
+            <StackPanel x:Name="SectionsHost" Spacing="16" />
+        </ScrollViewer>
     </Grid>
 </Page>

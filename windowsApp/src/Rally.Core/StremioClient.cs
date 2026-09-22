@@ -7,7 +7,7 @@ namespace Rally.Core;
 public sealed class StremioClient(HttpClient http)
 {
     private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
-        { "user-agent", "referer", "origin", "cookie" };
+        { "accept", "accept-language", "authorization", "cookie", "origin", "referer", "user-agent" };
 
     public async Task<JsonDocument> FetchManifestAsync(string manifestUrl, CancellationToken ct = default)
     {

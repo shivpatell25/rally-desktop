@@ -18,10 +18,13 @@ public sealed class QualityTests
     [Fact]
     public void RankOrdering()
     {
-        Assert.True(StreamSelector.QualityRank(new StreamQualityInfo("4K", null, true, false, false)) >
-                    StreamSelector.QualityRank(new StreamQualityInfo("1080p", null, false, false, false)));
-        Assert.True(StreamSelector.QualityRank(new StreamQualityInfo("1080p", null, false, false, true)) >
-                    StreamSelector.QualityRank(new StreamQualityInfo("1080p", null, false, false, false)));
+        Assert.Equal(700, StreamSelector.QualityRank(new StreamQualityInfo("4K", null, true, false, false)));
+        Assert.Equal(500, StreamSelector.QualityRank(new StreamQualityInfo("1080p", null, false, false, false)));
+        Assert.Equal(300, StreamSelector.QualityRank(new StreamQualityInfo("720p", null, false, false, false)));
+        Assert.Equal(300, StreamSelector.QualityRank(new StreamQualityInfo("HD", null, false, false, false)));
+        Assert.Equal(100, StreamSelector.QualityRank(new StreamQualityInfo(null, null, false, false, false)));
+        Assert.Equal(560, StreamSelector.QualityRank(new StreamQualityInfo("1080p", null, false, false, true)));
+        Assert.Equal(530, StreamSelector.QualityRank(new StreamQualityInfo("1080p", "60 fps", false, true, false)));
     }
 }
 
@@ -109,7 +112,10 @@ public sealed class ProtocolTests
             new("Watch here", null, "http://x/page.html", null, null, null, false),
         };
         var cands = StreamResolver.Candidates(ev, [], opts);
-        Assert.Equal(["http://x/720", "http://x/4k"], cands.Select(c => c.Url));
+        // HTML watch page filtered; addon results are event-scoped so both
+        // options are exact and quality decides (toCandidate).
+        Assert.Equal(["http://x/4k", "http://x/720"], cands.Select(c => c.Url));
+        Assert.All(cands, c => Assert.True(c.ExactMatch));
     }
 
     [Fact]

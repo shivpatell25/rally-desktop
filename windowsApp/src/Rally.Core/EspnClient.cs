@@ -25,14 +25,16 @@ public sealed class EspnClient(HttpClient http)
 
     public async Task<List<SportEvent>> FetchAllAsync(int limit = 100, CancellationToken ct = default)
     {
-        var tasks = Leagues.Select(l => FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, ct));
+        var tasks = Leagues.Select(l => FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct));
         var results = await Task.WhenAll(tasks);
         return results.SelectMany(x => x).OrderBy(e => e.StartTime).ToList();
     }
 
-    public async Task<List<SportEvent>> FetchScoreboardAsync(string sport, string league, string domainLeague, int limit = 100, CancellationToken ct = default)
+    public async Task<List<SportEvent>> FetchScoreboardAsync(string sport, string league, string domainLeague, int limit = 100, string? dates = null, CancellationToken ct = default)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}sports/{sport}/{league}/scoreboard?limit={limit}");
+        var url = $"{BaseUrl}sports/{sport}/{league}/scoreboard?limit={limit}";
+        if (!string.IsNullOrEmpty(dates)) url += $"&dates={Uri.EscapeDataString(dates)}";
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.UserAgent.ParseAdd("Rally/Windows");
         using var res = await http.SendAsync(req, ct);
         res.EnsureSuccessStatusCode();
@@ -57,7 +59,9 @@ public sealed class EspnClient(HttpClient http)
                 t.Value.GetPropertyOrNull("id")?.GetString() ?? Guid.NewGuid().ToString(),
                 t.Value.GetPropertyOrNull("displayName")?.GetString() ?? t.Value.GetPropertyOrNull("name")?.GetString() ?? "?",
                 t.Value.GetPropertyOrNull("abbreviation")?.GetString() ?? "?",
-                t.Value.GetPropertyOrNull("logo")?.GetString());
+                t.Value.GetPropertyOrNull("logo")?.GetString(),
+                c?.GetPropertyOrNull("records")?.EnumerateArray()
+                    .Select(r => new TeamRecord(r.GetPropertyOrNull("name")?.GetString(), r.GetPropertyOrNull("summary")?.GetString())).ToList());
         }
         int? ScoreOf(string homeAway)
         {
@@ -75,13 +79,18 @@ public sealed class EspnClient(HttpClient http)
             : state == "in" ? EventStatus.Live : EventStatus.NotStarted;
         var start = e.GetPropertyOrNull("date")?.GetString() is string d && DateTimeOffset.TryParse(d, out var dt)
             ? dt : DateTimeOffset.UtcNow;
+        var broadcasts = new List<string>();
+        foreach (var b in comp?.GetPropertyOrNull("broadcasts")?.EnumerateArray() ?? [])
+            foreach (var n in b.GetPropertyOrNull("names")?.EnumerateArray() ?? [])
+                if (n.GetString() is string s && s.Length > 0) broadcasts.Add(s);
         return new SportEvent(
             e.GetPropertyOrNull("id")?.GetString() ?? Guid.NewGuid().ToString(),
             e.GetPropertyOrNull("name")?.GetString() ?? e.GetPropertyOrNull("shortName")?.GetString() ?? "Game",
             TeamOf("home"), TeamOf("away"), start, status,
             ScoreOf("home"), ScoreOf("away"), sport, domainLeague,
             comp?.GetPropertyOrNull("venue")?.GetPropertyOrNull("fullName")?.GetString(),
-            type?.GetPropertyOrNull("shortDetail")?.GetString() ?? type?.GetPropertyOrNull("detail")?.GetString());
+            type?.GetPropertyOrNull("shortDetail")?.GetString() ?? type?.GetPropertyOrNull("detail")?.GetString(),
+            broadcasts.Distinct().ToList());
     }
 }
 

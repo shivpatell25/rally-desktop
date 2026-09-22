@@ -1,0 +1,116 @@
+<Page
+    x:Class="Rally.App.Views.TeamHubPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource RallyBackground}">
+    <ScrollViewer Padding="20">
+        <StackPanel Spacing="12" MaxWidth="960">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Button Content="‹ Back" Click="Back_Click" />
+                <ProgressRing x:Name="Spinner" IsActive="False" Width="24" Height="24" />
+            </StackPanel>
+            <StackPanel Spacing="2">
+                <TextBlock x:Name="TeamLeague" FontSize="12" FontWeight="Bold" Foreground="{StaticResource RallyAccent}" />
+                <TextBlock x:Name="TeamName" FontSize="28" FontWeight="Bold" TextWrapping="Wrap" />
+                <TextBlock x:Name="StandingSummary" Visibility="Collapsed" Opacity="0.7" TextWrapping="Wrap" />
+            </StackPanel>
+            <TextBlock x:Name="NotFavoriteText" Visibility="Collapsed" TextWrapping="Wrap"
+                Text="Team pages are available only for your favorite teams." />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="AddButton" Visibility="Collapsed" Content="Add to My Teams" Click="Add_Click" />
+                <Button x:Name="RemoveButton" Visibility="Collapsed" Content="Remove" Click="Remove_Click" />
+                <Button x:Name="RetryButton" Visibility="Collapsed" Content="Retry" Click="Retry_Click" />
+            </StackPanel>
+            <TextBlock x:Name="ErrorText" Visibility="Collapsed" Opacity="0.7" TextWrapping="Wrap" />
+            <StackPanel x:Name="Sections" Spacing="8" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Overview" Tag="Overview" Click="Section_Click" />
+                    <Button Content="Games" Tag="Games" Click="Section_Click" />
+                    <Button Content="Roster" Tag="Roster" Click="Section_Click" />
+                    <Button Content="Injuries" Tag="Injuries" Click="Section_Click" />
+                </StackPanel>
+                <StackPanel x:Name="OverviewPanel" Spacing="8">
+                    <TextBlock Text="SEASON" FontSize="12" FontWeight="Bold" Opacity="0.7" />
+                    <TextBlock x:Name="SeasonText" TextWrapping="Wrap" />
+                    <TextBlock Text="NEXT GAME" FontSize="12" FontWeight="Bold" Opacity="0.7" />
+                    <ListView x:Name="NextGame" SelectionMode="Single" SelectionChanged="Game_SelectionChanged" MaxHeight="120">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock FontSize="12" Opacity="0.7">
+                                        <Run Text="{Binding League}" /><Run Text=" · " /><Run Text="{Binding StatusText}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="NextGameEmpty" Visibility="Collapsed" Opacity="0.7"
+                        Text="No upcoming game is listed." />
+                    <TextBlock Text="RECENT FORM" FontSize="12" FontWeight="Bold" Opacity="0.7" />
+                    <ListView x:Name="RecentForm" SelectionMode="Single" SelectionChanged="Game_SelectionChanged" MaxHeight="360">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock FontSize="12" Opacity="0.7">
+                                        <Run Text="{Binding League}" /><Run Text=" · " /><Run Text="{Binding StatusText}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="RecentFormEmpty" Visibility="Collapsed" Opacity="0.7"
+                        Text="No completed games yet." />
+                </StackPanel>
+                <StackPanel x:Name="GamesPanel" Spacing="8" Visibility="Collapsed">
+                    <ListView x:Name="Schedule" SelectionMode="Single" SelectionChanged="Game_SelectionChanged" MaxHeight="480">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock FontSize="12" Opacity="0.7">
+                                        <Run Text="{Binding League}" /><Run Text=" · " /><Run Text="{Binding StatusText}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="ScheduleEmpty" Visibility="Collapsed" Opacity="0.7"
+                        Text="No games are listed for this team." />
+                </StackPanel>
+                <StackPanel x:Name="RosterPanel" Spacing="8" Visibility="Collapsed">
+                    <ListView x:Name="Roster" MaxHeight="480">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock FontSize="12" Opacity="0.7">
+                                        <Run Text="{Binding Position}" /><Run Text=" · #" /><Run Text="{Binding Jersey}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="RosterEmpty" Visibility="Collapsed" Opacity="0.7"
+                        Text="Roster data is not available." />
+                </StackPanel>
+                <StackPanel x:Name="InjuriesPanel" Spacing="8" Visibility="Collapsed">
+                    <ListView x:Name="Injuries" MaxHeight="480">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Padding="8" Background="{StaticResource RallySurface}" CornerRadius="8">
+                                    <TextBlock Text="{Binding PlayerName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding Status}" FontSize="12" Foreground="{StaticResource RallyAccent}" />
+                                    <TextBlock Text="{Binding Detail}" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="InjuriesEmpty" Visibility="Collapsed" Opacity="0.7"
+                        Text="No injuries are listed." />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

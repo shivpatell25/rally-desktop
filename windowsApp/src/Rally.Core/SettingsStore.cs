@@ -100,6 +100,41 @@ public sealed class SettingsStore
         get => Bool("setup_complete", false);
         set => Set("setup_complete", value);
     }
+    public bool LiveGameAlertsEnabled
+    {
+        get => Bool("live_game_alerts_enabled", true);
+        set => Set("live_game_alerts_enabled", value);
+    }
+    public bool RedZoneAlertsEnabled
+    {
+        get => Bool("redzone_alerts_enabled", true);
+        set => Set("redzone_alerts_enabled", value);
+    }
+    public bool LowLatencyMode
+    {
+        get => Bool("low_latency_mode", true);
+        set => Set("low_latency_mode", value);
+    }
+    public bool AudioNormalizationEnabled
+    {
+        get => Bool("audio_normalization_enabled", true);
+        set => Set("audio_normalization_enabled", value);
+    }
+    public bool AdaptiveQualityEnabled
+    {
+        get => Bool("adaptive_quality_enabled", true);
+        set => Set("adaptive_quality_enabled", value);
+    }
+    public bool ReducedMotion
+    {
+        get => Bool("reduced_motion", false);
+        set => Set("reduced_motion", value);
+    }
+    public bool LargeText
+    {
+        get => Bool("large_text", false);
+        set => Set("large_text", value);
+    }
     public List<FavoriteTeam> FavoriteTeamProfiles
     {
         get

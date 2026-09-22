@@ -5,15 +5,39 @@ public enum EventStatus { NotStarted, Live, Halftime, Finished, Delayed, Cancele
 
 public enum IptvProvider { Stalker, Xtream }
 
-public sealed record Team(string Id, string Name, string Abbreviation, string? LogoUrl = null);
+public sealed record TeamRecord(string? Name, string? Summary);
+
+public sealed record Team(string Id, string Name, string Abbreviation, string? LogoUrl = null, List<TeamRecord>? Records = null);
+
+public sealed record PlayerLeader(string Category, string? TeamAbbr, string? TeamLogoUrl, string PlayerShortName, string StatDisplay, string? Position = null, string? HeadshotUrl = null);
+
+public sealed record HighlightClip(string Id, string Title, string? Description = null, int? DurationSeconds = null, string? ThumbnailUrl = null, string? StreamUrl = null, string? WebUrl = null);
+
+public sealed record PlayerStatRow(string DisplayName, string? ShortName = null, string? HeadshotUrl = null, string? Jersey = null, string? Position = null, List<string>? Stats = null);
+
+public sealed record PlayerStatTable(string? TeamId, string TeamName, string TeamAbbreviation, string? TeamLogoUrl, string? Category, List<string>? Labels, List<PlayerStatRow>? Rows);
+
+public sealed record TeamStatComparison(string Label, string AwayValue, string HomeValue);
+
+public sealed record GameDetail(List<PlayerLeader> Leaders, List<HighlightClip> Clips, List<PlayerStatTable> PlayerTables, List<TeamStatComparison> TeamStats, List<string> Broadcasts)
+{
+    public static GameDetail Empty => new([], [], [], [], []);
+}
+
+public sealed record StandingRow(string TeamId, string TeamName, string Abbreviation, string? LogoUrl, int Wins, int Losses, int? Ties, string? Pct, string? Gb);
+
+public sealed record RosterPlayer(string Id, string Name, string? ShortName, string? Position, string? Jersey, string? HeadshotUrl);
+
+public sealed record InjuryEntry(string PlayerName, string? Position, string? Status, string? Detail);
+
+public sealed record StreamQualityInfo(string? Resolution, string? Fps, bool Is4K, bool Is60Fps, bool IsHdr);
 
 public sealed record SportEvent(
     string Id, string Name, Team? HomeTeam, Team? AwayTeam,
     DateTimeOffset StartTime, EventStatus Status,
     int? ScoreHome, int? ScoreAway,
-    string Sport, string League, string? Venue = null, string? GameStatusDetail = null);
-
-public sealed record StreamQualityInfo(string? Resolution, string? Fps, bool Is4K, bool Is60Fps, bool IsHdr);
+    string Sport, string League, string? Venue = null, string? GameStatusDetail = null,
+    List<string>? Broadcasts = null);
 
 public sealed record EpgProgram(string Title, string? Description, DateTimeOffset? StartTime, DateTimeOffset? EndTime);
 
@@ -42,7 +66,9 @@ public sealed record PlayCandidate(
     string Id, string Title, string Url,
     Dictionary<string, string>? Headers,
     PlayKind Kind, bool ExactMatch, int Rank,
-    IptvChannel? Channel = null, string? AddonName = null);
+    IptvChannel? Channel = null, string? AddonName = null,
+    bool? PreflightPassed = null, long? PreflightLatencyMs = null, string? PreflightContentType = null,
+    float MatchConfidence = 0, string? MatchEvidence = null);
 
 public sealed record StreamHealth(int Successes = 0, int Failures = 0, int Stalls = 0, long AverageStartupMs = 0, long LastUpdatedMs = 0)
 {

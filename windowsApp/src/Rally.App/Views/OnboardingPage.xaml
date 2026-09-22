@@ -1,0 +1,30 @@
+<Page
+    x:Class="Rally.App.Views.OnboardingPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource RallyBackground}">
+    <ScrollViewer Padding="32">
+        <StackPanel Spacing="16" MaxWidth="640">
+            <TextBlock Text="Welcome to Rally" FontSize="32" FontWeight="Bold" />
+            <TextBlock Text="Your games, your teams, one place." FontSize="16" Opacity="0.7" />
+            <StackPanel Spacing="8" Padding="16" Background="{StaticResource RallySurface}" CornerRadius="12">
+                <TextBlock Text="1 · Choose your sports" FontSize="18" FontWeight="SemiBold" />
+                <TextBlock Text="Follow the leagues you care about — NFL, NBA, MLB, NHL, college ball, soccer and more. Scores and schedules stay front and center."
+                    TextWrapping="Wrap" Opacity="0.8" />
+            </StackPanel>
+            <StackPanel Spacing="8" Padding="16" Background="{StaticResource RallySurface}" CornerRadius="12">
+                <TextBlock Text="2 · Connect your sources" FontSize="18" FontWeight="SemiBold" />
+                <TextBlock Text="Link your IPTV provider (Stalker/Ministra or Xtream Codes) and any Stremio addons. Rally brings live TV and streams together."
+                    TextWrapping="Wrap" Opacity="0.8" />
+            </StackPanel>
+            <StackPanel Spacing="8" Padding="16" Background="{StaticResource RallySurface}" CornerRadius="12">
+                <TextBlock Text="3 · Watch your way" FontSize="18" FontWeight="SemiBold" />
+                <TextBlock Text="Pin favorite teams for kickoff, score, and final alerts. Open up to four games side by side in Multi-View."
+                    TextWrapping="Wrap" Opacity="0.8" />
+            </StackPanel>
+            <Button Content="Continue" Click="Continue_Click" Background="{StaticResource RallyLime}" />
+            <TextBlock Text="Rally includes no TV service of its own — you supply your own provider and addons."
+                TextWrapping="Wrap" Opacity="0.6" FontSize="12" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

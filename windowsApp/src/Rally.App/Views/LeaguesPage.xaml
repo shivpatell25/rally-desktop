@@ -1,0 +1,36 @@
+<Page
+    x:Class="Rally.App.Views.LeaguesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource RallyBackground}">
+    <Grid Padding="20" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="Leagues" FontSize="28" FontWeight="Bold" />
+            <ProgressRing x:Name="Spinner" IsActive="False" Width="24" Height="24" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Spacing="4">
+            <TextBlock Text="Every sport. One starting point." Opacity="0.7" />
+            <TextBlock x:Name="ErrorText" Visibility="Collapsed" Foreground="{StaticResource RallyLive}" TextWrapping="Wrap" />
+        </StackPanel>
+        <ListView x:Name="Leagues" Grid.Row="2" SelectionMode="Single"
+            SelectionChanged="Leagues_SelectionChanged">
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Padding="12" Background="{StaticResource RallySurface}" CornerRadius="8">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="{Binding DisplayName}" FontSize="18" FontWeight="Bold" />
+                            <TextBlock Text="{Binding LiveBadge}" Foreground="{StaticResource RallyLive}"
+                                FontSize="12" FontWeight="Bold" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding Summary}" FontSize="12" Opacity="0.7" />
+                    </StackPanel>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</Page>

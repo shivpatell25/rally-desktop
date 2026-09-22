@@ -30,13 +30,13 @@ public static class StreamSelector
         return homeOk && awayOk;
     }
 
-    // 1:1 with qualityRank — higher wins.
+    // 1:1 with qualityRank in SelectBestStreamUseCase.kt — higher wins:
+    // 4K(700) > 1080p(500) > 720p/HD(300) > unknown(100), HDR +60, 60fps +30.
     public static int QualityRank(StreamQualityInfo q)
     {
-        var rank = q.Resolution switch { "4K" => 400, "1080p" => 300, "720p" => 200, "HD" => 100, _ => 0 };
-        if (q.IsHdr) rank += 15;
-        if (q.Is60Fps) rank += 5;
-        if (q.Fps == "50 fps") rank += 4;
-        return rank;
+        var baseRank = q.Is4K ? 700 : q.Resolution switch { "1080p" => 500, "720p" or "HD" => 300, _ => 100 };
+        if (q.IsHdr) baseRank += 60;
+        if (q.Is60Fps) baseRank += 30;
+        return baseRank;
     }
 }
