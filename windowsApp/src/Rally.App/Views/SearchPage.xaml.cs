@@ -63,7 +63,7 @@ public sealed partial class SearchPage : Page
         return new StalkerClient(_http, _settings).GetChannelsAsync(ct);
     }
 
-    private void QueryBox_TextChanged(object sender, TextBoxTextChangedEventArgs e)
+    private void QueryBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         _debounce.Stop();
         _debounce.Start();
