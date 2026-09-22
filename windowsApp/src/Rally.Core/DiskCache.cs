@@ -19,9 +19,9 @@ public sealed class DiskCache(string? directory = null)
             var path = PathFor(name);
             if (!File.Exists(path)) return default;
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
             if (!root.TryGetProperty("savedAt", out var saved) || !saved.TryGetInt64(out var ms))
                 return default;
-            // >= so a zero TTL is always expired, even within the same millisecond.
             if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ms >= maxAge.TotalMilliseconds)
                 return default;
             if (!root.TryGetProperty("payload", out var payload)) return default;
