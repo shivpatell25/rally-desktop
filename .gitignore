@@ -26,6 +26,7 @@ scratch/
 
 appleApp/.build/
 appleApp/dist/
+windowsApp/dist/
 
 # .NET
 bin/
