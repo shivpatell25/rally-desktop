@@ -209,10 +209,13 @@ public final class EspnClient: Sendable {
             else { .notStarted }
         let start = e.date.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
         let detail = comp?.status?.type?.shortDetail ?? comp?.status?.type?.detail
+        let broadcasts = Array(Set((comp?.broadcasts ?? []).flatMap { $0.names ?? [] }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }))
         return SportEvent(id: e.id, name: e.name ?? e.shortName ?? "Game",
             homeTeam: team(home), awayTeam: team(away), startTime: start, status: status,
             scoreHome: home?.score.flatMap(Int.init), scoreAway: away?.score.flatMap(Int.init),
-            sport: sport, league: domainLeague, venue: comp?.venue?.fullName, gameStatusDetail: detail)
+            sport: sport, league: domainLeague, venue: comp?.venue?.fullName, gameStatusDetail: detail,
+            broadcasts: broadcasts)
     }
     public struct GameDetail: Sendable {
         public var leaders: [PlayerLeader]

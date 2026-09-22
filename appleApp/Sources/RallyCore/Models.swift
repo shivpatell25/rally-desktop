@@ -119,14 +119,15 @@ public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
     public var bannerUrl: String?
     public var venue: String?
     public var gameStatusDetail: String?
+    public var broadcasts: [String]
     public init(id: String, name: String, homeTeam: Team? = nil, awayTeam: Team? = nil,
                 startTime: Date, status: EventStatus, scoreHome: Int? = nil, scoreAway: Int? = nil,
                 sport: String, league: String, bannerUrl: String? = nil, venue: String? = nil,
-                gameStatusDetail: String? = nil) {
+                gameStatusDetail: String? = nil, broadcasts: [String] = []) {
         self.id = id; self.name = name; self.homeTeam = homeTeam; self.awayTeam = awayTeam
         self.startTime = startTime; self.status = status; self.scoreHome = scoreHome; self.scoreAway = scoreAway
         self.sport = sport; self.league = league; self.bannerUrl = bannerUrl; self.venue = venue
-        self.gameStatusDetail = gameStatusDetail
+        self.gameStatusDetail = gameStatusDetail; self.broadcasts = broadcasts
     }
 }
 

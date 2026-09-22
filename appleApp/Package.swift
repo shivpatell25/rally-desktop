@@ -36,7 +36,8 @@ let package = Package(
         .testTarget(
             name: "RallyDesktopTests",
             dependencies: ["RallyCore"],
-            path: "Tests/RallyDesktopTests"
+            path: "Tests/RallyDesktopTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

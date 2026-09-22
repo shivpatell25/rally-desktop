@@ -34,7 +34,7 @@ public struct PlayCandidate: Sendable, Equatable, Identifiable {
 
 public enum StreamResolver {
     public static func candidates(event: SportEvent, channels: [IptvChannel], stremioOptions: [StremioStreamOption],
-                                  health: (String) -> Int = { _ in 0 }) -> [PlayCandidate] {
+                                  health: (String) -> Int = { _ in 0 }, tvStations: [String]? = nil) -> [PlayCandidate] {
         var out: [PlayCandidate] = []
         // Addon results are already scoped to the event by `findStreams(for:)`,
         // so every direct-playable option is an exact match (Android `toCandidate`).
@@ -45,6 +45,9 @@ public enum StreamResolver {
                 exactMatch: true, rank: StreamSelector.qualityRank(quality), addonName: opt.addonName,
                 matchConfidence: 0.98, matchEvidence: "Exact event match"))
         }
+        let stations = tvStations ?? event.broadcasts
+        let relevant = Dictionary(uniqueKeysWithValues: EventMatcher.relevantChannels(event: event, channels: channels, tvStations: stations)
+            .map { ($0.channel.id, $0) })
         for ch in channels {
             let guideText = [ch.guide?.now?.title, ch.guide?.next?.title].compactMap { $0 }.joined(separator: " ")
             let guideTitle = ch.guide?.now?.title ?? ""
@@ -52,15 +55,21 @@ public enum StreamResolver {
             let exactFromName = StreamSelector.textMatchesEvent(ch.name, event: event)
             let isRedZone = ch.name.range(of: "redzone", options: .caseInsensitive) != nil
                 || ch.name.range(of: "red zone", options: .caseInsensitive) != nil
-            let exact = !isRedZone && (exactFromGuide || exactFromName)
-            guard exact || ch.name.range(of: event.league, options: .caseInsensitive) != nil else { continue }
+            let match = relevant[ch.id]
+            // 1:1 with SelectBestStreamUseCase: name-exact needs a >=90 matcher score.
+            let exact = !isRedZone && (exactFromGuide || (exactFromName && (match?.likelihoodScore ?? 0) >= 90))
+            if match == nil && !exactFromGuide {
+                guard exact || ch.name.range(of: event.league, options: .caseInsensitive) != nil else { continue }
+            }
             let quality = parseQualityFromChannelName([ch.name, guideTitle].joined(separator: " "))
             let evidence: String = exactFromGuide ? "Now playing: \(guideTitle)"
                 : exactFromName ? "Dedicated matchup channel"
-                : guideTitle.isEmpty ? "Unverified channel" : "Now playing: \(guideTitle)"
+                : !guideTitle.isEmpty ? "Now playing: \(guideTitle)"
+                : match?.matchBadge ?? "Unverified channel"
             out.append(PlayCandidate(title: ch.name, url: ch.streamUrl ?? ch.id, headers: nil, kind: .iptv,
                 exactMatch: exact, rank: StreamSelector.qualityRank(quality), channel: ch,
-                matchConfidence: exact ? 0.9 : 0.25, matchEvidence: evidence))
+                matchConfidence: match.map { $0.likelihoodScore / 100 } ?? (exact ? 0.9 : 0.25),
+                matchEvidence: evidence))
         }
         let ranked = sort(out, health: health)
         // Addons often return the same URL across matched metas — collapse
