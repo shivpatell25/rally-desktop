@@ -310,8 +310,97 @@ public final class EspnClient: Sendable {
         }()
         return GameDetail(leaders: leaders, clips: clips, playerTables: playerTables, teamStats: teamStats)
     }
-
     public static func path(forLeague domainLeague: String) -> (sport: String, path: String)? {
         leagues.first(where: { $0.league == domainLeague }).map { ($0.sport, $0.path) }
+    }
+
+    // MARK: - Team hub sources (mirrors EspnRepositoryImpl.getTeamHub)
+
+    public struct TeamStanding: Sendable, Equatable {
+        public var summary: String?
+        public var rank: String?
+    }
+
+    private func getJson(_ url: URL) async -> Any? {
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("Rally/macOS", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await session.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        return obj
+    }
+
+    private static func str(_ obj: [String: Any], _ keys: [String]) -> String? {
+        for k in keys {
+            if let s = obj[k] as? String, !s.isEmpty { return s }
+            if let n = obj[k] as? Int { return String(n) }
+            if let n = obj[k] as? Double, n == n.rounded() { return String(Int(n)) }
+        }
+        return nil
+    }
+
+    /// League team catalog for the settings browser. Never throws — empty on error.
+    public func fetchTeams(sport: String, league: String) async -> [Team] {
+        guard let url = URL(string: "\(Self.baseURL)sports/\(sport)/\(league)/teams") else { return [] }
+        guard let root = await getJson(url) as? [String: Any] else { return [] }
+        var out: [Team] = []
+        let sports = root["sports"] as? [[String: Any]] ?? (root["leagues"] != nil ? [root] : [])
+        for s in sports {
+            for l in (s["leagues"] as? [[String: Any]]) ?? [] {
+                for entry in (l["teams"] as? [[String: Any]]) ?? [] {
+                    guard let t = entry["team"] as? [String: Any] else { continue }
+                    let logos = t["logos"] as? [[String: Any]]
+                    out.append(Team(
+                        id: Self.str(t, ["id"]) ?? UUID().uuidString,
+                        name: Self.str(t, ["displayName", "name"]) ?? "?",
+                        abbreviation: Self.str(t, ["abbreviation", "shortName"]) ?? "?",
+                        logoUrl: logos?.first.flatMap { $0["href"] as? String } ?? (t["logo"] as? String)))
+                }
+            }
+        }
+        var seen = Set<String>()
+        return out.filter { seen.insert($0.id).inserted }
+    }
+
+    /// Standing header (record summary + rank) for a team page.
+    public func fetchTeamStanding(sport: String, league: String, teamId: String) async -> TeamStanding {
+        guard let url = URL(string: "\(Self.baseURL)sports/\(sport)/\(league)/teams/\(teamId)") else { return TeamStanding() }
+        guard let root = await getJson(url) as? [String: Any],
+              let team = root["team"] as? [String: Any] else { return TeamStanding() }
+        let record = team["record"] as? [String: Any]
+        let items = team["recordItems"] as? [[String: Any]] ?? record?["items"] as? [[String: Any]] ?? []
+        let summary = Self.str(team, ["summary"])
+            ?? items.compactMap { $0["summary"] as? String }.first
+            ?? record?["summary"] as? String
+        return TeamStanding(summary: summary, rank: Self.str(team, ["rank", "curatedRank"]))
+    }
+
+    /// Roster athletes with headshots for player-follow cards.
+    public func fetchRoster(sport: String, league: String, teamId: String) async -> [RosterPlayer] {
+        guard let url = URL(string: "\(Self.baseURL)sports/\(sport)/\(league)/teams/\(teamId)/roster") else { return [] }
+        guard let root = await getJson(url) as? [String: Any],
+              let athletes = root["athletes"] as? [[String: Any]] else { return [] }
+        return athletes.compactMap { a in
+            guard let name = Self.str(a, ["displayName", "fullName"]), !name.isEmpty else { return nil }
+            let pos = (a["position"] as? [String: Any])?["abbreviation"] as? String
+            let headshot = (a["headshot"] as? [String: Any])?["href"] as? String
+            return RosterPlayer(id: Self.str(a, ["id"]) ?? name,
+                                name: name, shortName: a["shortName"] as? String,
+                                position: pos, jersey: Self.str(a, ["jersey"]), headshotUrl: headshot)
+        }
+    }
+
+    /// Injury list for the team page.
+    public func fetchInjuries(sport: String, league: String, teamId: String) async -> [InjuryEntry] {
+        guard let url = URL(string: "\(Self.baseURL)sports/\(sport)/\(league)/teams/\(teamId)/injuries") else { return [] }
+        guard let root = await getJson(url) as? [String: Any] else { return [] }
+        let items = (root["injuries"] as? [[String: Any]]) ?? (root["entries"] as? [[String: Any]]) ?? []
+        return items.compactMap { item in
+            let athlete = item["athlete"] as? [String: Any]
+            guard let name = Self.str(athlete ?? item, ["displayName", "fullName", "name"]), !name.isEmpty else { return nil }
+            let pos = (athlete?["position"] as? [String: Any])?["abbreviation"] as? String
+            return InjuryEntry(playerName: name, position: pos,
+                               status: Self.str(item, ["status", "type"]),
+                               detail: Self.str(item, ["details", "shortComment", "comment", "description"]))
+        }
     }
 }

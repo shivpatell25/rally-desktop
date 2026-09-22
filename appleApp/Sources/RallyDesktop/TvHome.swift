@@ -704,28 +704,58 @@ struct TvMyTeams: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
+
+    /// Games for favorites, soonest first (WatchlistViewModel). Matched on
+    /// league:id — bare ESPN ids collide across leagues (e.g. id 1 is
+    /// Falcons, Orioles, and Bruins in different leagues).
+    private var gamesForYou: [SportEvent] {
+        let keys = Set(settings.favoriteTeamProfiles.map(\.key))
+        return store.events.filter {
+            guard let h = $0.homeTeam?.id, let a = $0.awayTeam?.id else { return false }
+            return keys.contains("\($0.league):\(h)") || keys.contains("\($0.league):\(a)")
+        }.sorted { $0.startTime < $1.startTime }
+    }
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                ForEach(settings.favoriteTeamProfiles) { team in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(team.name.uppercased()).font(.system(size: 13, weight: .bold)).tracking(1.4)
-                            .foregroundStyle(.white)
-                        let next = store.events.filter {
-                            $0.homeTeam?.id == team.id || $0.awayTeam?.id == team.id
-                        }.prefix(5)
-                        if next.isEmpty {
-                            Text("No upcoming games").font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                if !settings.favoriteTeamProfiles.isEmpty {
+                    Text("FOLLOWING").font(.system(size: 11, weight: .bold)).tracking(1.4)
+                        .foregroundStyle(RallyTheme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(settings.favoriteTeamProfiles) { team in
+                        Button { store.show(.team(team)) } label: {
+                            HStack(spacing: 12) {
+                                if let logo = team.logoUrl, let link = URL(string: logo) {
+                                    AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
+                                        Color.clear
+                                    }
+                                    .frame(width: 40, height: 40)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(team.name.uppercased()).font(.system(size: 13, weight: .bold)).tracking(1.4)
+                                        .foregroundStyle(.white)
+                                    Text("TEAM CENTER ›").font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(RallyTheme.rallyCyan)
+                                }
+                                Spacer()
+                            }
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.white.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
                         }
-                        ForEach(Array(next)) { event in
-                            GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
-                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
+                }
+                if !gamesForYou.isEmpty {
+                    Text("GAMES FOR YOU").font(.system(size: 11, weight: .bold)).tracking(1.4)
+                        .foregroundStyle(RallyTheme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 6)
+                    ForEach(gamesForYou.prefix(20)) { event in
+                        GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
+                    }
                 }
             }
             .padding(.horizontal, m.hPad).padding(.vertical, 14)
@@ -733,7 +763,17 @@ struct TvMyTeams: View {
         .background { AmbientBackground() }
         .overlay {
             if settings.favoriteTeamProfiles.isEmpty {
-                Text("Star teams to build your Up Next").foregroundStyle(RallyTheme.textSecondary)
+                VStack(spacing: 10) {
+                    Text("MAKE RALLY YOURS").font(.system(size: 13, weight: .bold)).tracking(1.2)
+                        .foregroundStyle(.white)
+                    Text("Choose favorite teams to build this page.")
+                        .font(.callout).foregroundStyle(RallyTheme.textSecondary)
+                    Button("CHOOSE TEAMS ›") { store.show(.settings) }
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.black)
+                        .padding(.horizontal, 24).padding(.vertical, 10)
+                        .background(RallyTheme.offWhite).clipShape(RoundedRectangle(cornerRadius: 16))
+                        .buttonStyle(.plain)
+                }
             }
         }
     }

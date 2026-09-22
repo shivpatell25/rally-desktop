@@ -31,6 +31,7 @@ enum RallyTab: Int, Hashable {
 /// multi-view transitions always surface (SwiftUI presents one sheet per level).
 enum AppSheet: Identifiable {
     case eventDetail(SportEvent)
+    case team(FavoriteTeam)
     case player(event: SportEvent?, channel: IptvChannel?, clip: HighlightClip? = nil, picker: Bool = false)
     case multiView
     case search
@@ -39,6 +40,7 @@ enum AppSheet: Identifiable {
     var id: String {
         switch self {
         case .eventDetail(let e): return "event-\(e.id)"
+        case .team(let t): return "team-\(t.key)"
         case .player(let e, let c, let clip, _):
             return "player-\(e?.id ?? c?.id ?? "none")-\(clip?.id ?? "live")"
         case .multiView: return "multiview"
@@ -206,6 +208,12 @@ enum LaunchArgs {
         let id = String(arg.dropFirst(7))
         return id.isEmpty ? nil : id
     }
+    /// Debug: open a team hub directly (`--team=NFL:1`), resolved from favorites.
+    static var teamKey: String? {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--team=") }) else { return nil }
+        let key = String(arg.dropFirst(7))
+        return key.isEmpty ? nil : key
+    }
 }
 
 struct ContentView: View {
@@ -264,6 +272,10 @@ struct ContentView: View {
                 if let e = store.events.first(where: { $0.id == id }) { store.show(.player(event: e, channel: nil)) }
                 else if let e = store.featuredEvent { store.show(.player(event: e, channel: nil)) }
             }
+            if let key = LaunchArgs.teamKey,
+               let team = store.settings.favoriteTeamProfiles.first(where: { $0.key == key }) {
+                store.show(.team(team))
+            }
         }
         .sheet(item: Binding<AppSheet?>(
             get: {
@@ -277,6 +289,8 @@ struct ContentView: View {
                 switch sheet {
                 case .eventDetail(let event):
                     TvEventDetail(event: event).frame(minWidth: 1000, minHeight: 700)
+                case .team(let team):
+                    TvTeamHub(team: team).frame(minWidth: 900, minHeight: 650)
                 case .player:
                     EmptyView()
                 case .multiView:
@@ -331,6 +345,7 @@ struct LeaguesView: View {
 
 struct SearchView: View {
     @EnvironmentObject var store: RallyStore
+    @EnvironmentObject var settings: SettingsStore
     @State private var query = ""
     var body: some View {
         VStack {
@@ -338,6 +353,19 @@ struct SearchView: View {
                 .textFieldStyle(.roundedBorder)
                 .padding([.horizontal, .top])
             List {
+                if !filteredTeams.isEmpty {
+                    Section("Teams") {
+                        ForEach(filteredTeams) { team in
+                            HStack {
+                                Text(team.name)
+                                Spacer()
+                                Text("TEAM CENTER ›").font(.caption).foregroundStyle(RallyTheme.rallyCyan)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture { store.show(.team(team)) }
+                        }
+                    }
+                }
                 ForEach(filteredEvents) { event in
                     GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
                 }
@@ -359,6 +387,13 @@ struct SearchView: View {
             }
         }
         .background { AmbientBackground() }
+    }
+    private var filteredTeams: [FavoriteTeam] {
+        guard !query.isEmpty else { return Array(settings.favoriteTeamProfiles.prefix(12)) }
+        let q = query.lowercased()
+        return settings.favoriteTeamProfiles.filter {
+            $0.name.lowercased().contains(q) || $0.abbreviation.lowercased().contains(q)
+        }
     }
     private var filteredEvents: [SportEvent] {
         guard !query.isEmpty else { return Array(store.events.prefix(20)) }

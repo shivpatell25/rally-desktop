@@ -105,6 +105,31 @@ public struct PlayerLeader: Codable, Sendable, Equatable {
     }
 }
 
+public struct RosterPlayer: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public var shortName: String?
+    public var position: String?
+    public var jersey: String?
+    public var headshotUrl: String?
+    public init(id: String, name: String, shortName: String? = nil, position: String? = nil,
+                jersey: String? = nil, headshotUrl: String? = nil) {
+        self.id = id; self.name = name; self.shortName = shortName; self.position = position
+        self.jersey = jersey; self.headshotUrl = headshotUrl
+    }
+}
+
+public struct InjuryEntry: Codable, Sendable, Equatable, Identifiable {
+    public var id: String { playerName + (status ?? "") }
+    public var playerName: String
+    public var position: String?
+    public var status: String?
+    public var detail: String?
+    public init(playerName: String, position: String? = nil, status: String? = nil, detail: String? = nil) {
+        self.playerName = playerName; self.position = position; self.status = status; self.detail = detail
+    }
+    private enum CodingKeys: String, CodingKey { case playerName, position, status, detail }
+}
 public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var name: String

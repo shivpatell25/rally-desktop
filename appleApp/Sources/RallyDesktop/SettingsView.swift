@@ -9,6 +9,10 @@ struct SettingsView: View {
     @State private var newAddon = ""
     @State private var section = 0
     @State private var testing = false
+    @State private var catalogLeague = "NFL"
+    @State private var catalogTeams: [Team] = []
+    @State private var catalogFilter = ""
+    @State private var catalogLoading = false
 
     private let sections = ["Sources", "Sports", "Teams", "Alerts", "Viewing", "Support"]
     private let icons = ["antenna.radiowaves.left.and.right", "trophy", "star", "bell", "play.tv", "info.circle"]
@@ -247,9 +251,58 @@ struct SettingsView: View {
                     Divider().opacity(0.2)
                 }
             }
+            glassCard {
+                Text("ADD TEAMS").font(.system(size: 11, weight: .bold)).tracking(1)
+                    .foregroundStyle(RallyTheme.textSecondary)
+                Text("Pick a league to browse its clubs. Tapping a starred team removes it.")
+                    .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                Picker("League", selection: $catalogLeague) {
+                    ForEach(EspnClient.leagues.map(\.league), id: \.self) { league in
+                        Text(league).tag(league)
+                    }
+                }
+                .frame(maxWidth: 260)
+                .task(id: catalogLeague) { await loadCatalog() }
+                TextField("Filter teams", text: $catalogFilter)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                if catalogLoading {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
+                ForEach(filteredCatalog) { team in
+                    HStack(spacing: 10) {
+                        if let logo = team.logoUrl, let link = URL(string: logo) {
+                            AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
+                                Color.clear
+                            }
+                            .frame(width: 30, height: 30)
+                        }
+                        Text(team.name).font(.system(size: 14, weight: .semibold))
+                        Spacer()
+                        let fav = FavoriteTeam(id: team.id, league: catalogLeague, name: team.name,
+                                               abbreviation: team.abbreviation, logoUrl: team.logoUrl)
+                        Button(settings.isFavoriteTeam(id: team.id, league: catalogLeague) ? "★" : "☆") {
+                            _ = settings.toggleFavoriteTeam(fav)
+                        }.font(.system(size: 16)).buttonStyle(.plain)
+                    }
+                    Divider().opacity(0.2)
+                }
+            }
         }
+        .task { await loadCatalog() }
     }
 
+    private var filteredCatalog: [Team] {
+        guard !catalogFilter.isEmpty else { return catalogTeams }
+        let q = catalogFilter.lowercased()
+        return catalogTeams.filter { $0.name.lowercased().contains(q) || $0.abbreviation.lowercased().contains(q) }
+    }
+
+    private func loadCatalog() async {
+        guard let path = EspnClient.path(forLeague: catalogLeague) else { catalogTeams = []; return }
+        catalogLoading = true
+        defer { catalogLoading = false }
+        catalogTeams = await store.espnClient.fetchTeams(sport: path.sport, league: path.path)
+    }
     private var alertsPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             panelTitle("ALERTS", "Live notifications")

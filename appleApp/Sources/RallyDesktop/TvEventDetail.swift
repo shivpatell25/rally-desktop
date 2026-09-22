@@ -100,11 +100,11 @@ struct TvEventDetail: View {
                                 .background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 16))
                                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(RallyTheme.glassBorder, lineWidth: 1))
                         }.buttonStyle(.plain)
-                        if let home = event.homeTeam {
-                            let team = FavoriteTeam(id: home.id, league: event.league, name: home.name,
-                                abbreviation: home.abbreviation, logoUrl: home.logoUrl)
+                        ForEach([event.awayTeam, event.homeTeam].compactMap { $0 }, id: \.id) { side in
+                            let team = FavoriteTeam(id: side.id, league: event.league, name: side.name,
+                                abbreviation: side.abbreviation, logoUrl: side.logoUrl)
                             Button { _ = settings.toggleFavoriteTeam(team) } label: {
-                                Text(settings.isFavoriteTeam(id: home.id, league: event.league) ? "Saved" : "Save")
+                                Text((settings.isFavoriteTeam(id: side.id, league: event.league) ? "Saved: " : "Save ") + side.abbreviation)
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(RallyTheme.textPrimary).padding(.horizontal, 24).padding(.vertical, 10)
                                     .background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 16))
@@ -240,6 +240,13 @@ struct TvEventDetail: View {
             Text(team?.name.uppercased() ?? "TBD").font(.system(size: 12, weight: .bold)).foregroundStyle(.white).lineLimit(1)
             Text(recordSummary(team) ?? "No record available")
                 .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(2)
+            if let team {
+                let fav = FavoriteTeam(id: team.id, league: event.league, name: team.name,
+                                       abbreviation: team.abbreviation, logoUrl: team.logoUrl)
+                Button("TEAM CENTER ›") { store.show(.team(fav)) }
+                    .font(.system(size: 10, weight: .bold)).foregroundStyle(RallyTheme.rallyCyan)
+                    .buttonStyle(.plain)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
