@@ -234,6 +234,18 @@ public final class SettingsStore: ObservableObject {
 
     public var hasCredentials: Bool { setupComplete || !portalUrl.isEmpty || !stremioAddonUrls.isEmpty }
 
+    /// Credentials the user actually entered. The bundled default addon is
+    /// excluded: a fresh install must hit onboarding (Android ships no default
+    /// addon at all and contacts nothing until configured).
+    public var hasUserCredentials: Bool {
+        setupComplete || !portalUrl.isEmpty || !xtreamServerUrl.isEmpty || !xtreamUsername.isEmpty
+            || stremioAddonUrls.contains { $0.lowercased() != Self.defaultAddon.lowercased() }
+    }
+
+    /// First-run gate (Android `startDest`): onboarding until setup is saved
+    /// or the user already configured a source.
+    public var needsOnboarding: Bool { !setupComplete && !hasUserCredentials }
+
     /// Toggles by `league:id`, mirroring `toggleFavoriteTeam` (also keeps the legacy name set).
     @discardableResult
     public func toggleFavoriteTeam(_ team: FavoriteTeam) -> Bool {

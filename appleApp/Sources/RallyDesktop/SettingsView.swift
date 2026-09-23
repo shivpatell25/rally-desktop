@@ -13,6 +13,19 @@ struct SettingsView: View {
     @State private var catalogTeams: [Team] = []
     @State private var catalogFilter = ""
     @State private var catalogLoading = false
+    // Sources drafts: nothing persists until Save validates (Android saveConfiguration).
+    @State private var draftProvider: IptvProvider = .stalker
+    @State private var draftPortal = ""
+    @State private var draftMac = ""
+    @State private var draftSerial = ""
+    @State private var draftDevice = ""
+    @State private var draftServer = ""
+    @State private var draftUser = ""
+    @State private var draftPass = ""
+    @State private var draftAddons: [String] = []
+    @State private var draftsSynced = false
+    @State private var configurationError: String?
+    @State private var savedNote = false
 
     private let sections = ["Sources", "Sports", "Teams", "Alerts", "Viewing", "Support"]
     private let icons = ["antenna.radiowaves.left.and.right", "trophy", "star", "bell", "play.tv", "info.circle"]
@@ -85,19 +98,34 @@ struct SettingsView: View {
                 providerCard(title: "Xtream Codes", desc: "Server + login", provider: .xtream)
             }
             glassCard {
-                if settings.iptvProvider == .stalker {
-                    settingsField("Portal URL", text: $settings.portalUrl)
-                    settingsField("MAC address", text: macBinding(), mono: true)
-                    settingsField("Serial (optional)", text: $settings.serialNumber)
-                    settingsField("Device ID (optional)", text: $settings.deviceId)
+                if draftProvider == .stalker {
+                    settingsField("Portal URL", text: $draftPortal)
+                    settingsField("MAC address", text: $draftMac, mono: true)
+                    settingsField("Serial (optional)", text: $draftSerial)
+                    settingsField("Device ID (optional)", text: $draftDevice)
                 } else {
-                    settingsField("Server URL", text: $settings.xtreamServerUrl)
-                    settingsField("Username", text: $settings.xtreamUsername)
+                    settingsField("Server URL", text: $draftServer)
+                    settingsField("Username", text: $draftUser)
                     HStack {
                         Text("Password").frame(width: 150, alignment: .leading)
-                        SecureField("Required", text: passwordBinding())
+                        SecureField("Required", text: $draftPass)
                     }
                     .font(.system(size: 14))
+                }
+            }
+            glassCard {
+                HStack(spacing: 10) {
+                    tvButton("Save and Apply", primary: true) { saveDrafts() }
+                    if savedNote {
+                        statusPill("Saved", good: true)
+                    } else if let error = configurationError {
+                        Text(error).font(.system(size: 12)).foregroundStyle(RallyTheme.liveRed)
+                            .lineLimit(2).frame(maxWidth: 420, alignment: .leading)
+                    } else {
+                        Text("Edits stay here until saved — nothing persists until validation passes.")
+                            .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
+                            .frame(maxWidth: 420, alignment: .leading)
+                    }
                 }
             }
             glassCard {
@@ -123,7 +151,7 @@ struct SettingsView: View {
             glassCard {
                 Text("STREMIO ADDONS").font(.system(size: 11, weight: .bold)).tracking(1)
                     .foregroundStyle(RallyTheme.textSecondary)
-                ForEach(settings.stremioAddonUrls, id: \.self) { url in
+                ForEach(draftAddons, id: \.self) { url in
                     HStack(spacing: 10) {
                         Image(systemName: "globe").font(.system(size: 16))
                             .foregroundStyle(RallyTheme.rallyCyan)
@@ -149,10 +177,12 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                     tvButton("Add") {
                         let clean = newAddon.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !clean.isEmpty {
-                            settings.stremioAddonUrls.append(clean)
+                        if !clean.isEmpty, UrlNormalizer.normalizeAddon(clean) != nil,
+                           !draftAddons.contains(clean) {
+                            draftAddons.append(clean)
                             newAddon = ""
-                            Task { await store.refresh() }
+                            configurationError = nil
+                            savedNote = false
                         }
                     }
                 }
@@ -160,11 +190,57 @@ struct SettingsView: View {
                     .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
             }
         }
+        .onAppear { syncDrafts() }
+    }
+
+    /// Copies saved settings into the drafts (fresh panel, or after save).
+    private func syncDrafts() {
+        draftProvider = settings.iptvProvider
+        draftPortal = settings.portalUrl
+        draftMac = settings.macAddress
+        draftSerial = settings.serialNumber
+        draftDevice = settings.deviceId
+        draftServer = settings.xtreamServerUrl
+        draftUser = settings.xtreamUsername
+        draftPass = settings.xtreamPassword
+        draftAddons = settings.stremioAddonUrls
+        draftsSynced = true
+        configurationError = nil
+        savedNote = false
+    }
+
+    /// Validates, persists, invalidates the old session, and marks setup done.
+    private func saveDrafts() {
+        if let error = SettingsValidator.validate(provider: draftProvider, portal: draftPortal, mac: draftMac,
+                                                  server: draftServer, user: draftUser, pass: draftPass,
+                                                  addons: draftAddons) {
+            configurationError = error
+            savedNote = false
+            return
+        }
+        settings.iptvProvider = draftProvider
+        settings.portalUrl = draftPortal
+        settings.macAddress = draftMac
+        settings.serialNumber = draftSerial
+        settings.deviceId = draftDevice
+        settings.xtreamServerUrl = draftServer
+        settings.xtreamUsername = draftUser
+        settings.xtreamPassword = draftPass
+        settings.stremioAddonUrls = draftAddons
+        store.resetProviderSession()
+        settings.setupComplete = true
+        configurationError = nil
+        savedNote = true
+        Task { await store.refresh() }
     }
 
     private func providerCard(title: String, desc: String, provider: IptvProvider) -> some View {
-        let selected = settings.iptvProvider == provider
-        return Button { settings.iptvProvider = provider } label: {
+        let selected = draftProvider == provider
+        return Button {
+            draftProvider = provider
+            configurationError = nil
+            savedNote = false
+        } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(title).font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
@@ -214,8 +290,6 @@ struct SettingsView: View {
                     .foregroundStyle(RallyTheme.textSecondary)
                 Text(settings.sportsOrder.joined(separator: " · "))
                     .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary)
-                Divider().opacity(0.2)
-                toggleRow("Setup complete", "Onboarding and defaults finished", $settings.setupComplete)
             }
         }
     }
@@ -426,14 +500,9 @@ struct SettingsView: View {
             .clipShape(Capsule())
     }
 
-    private func macBinding() -> Binding<String> {
-        Binding(get: { settings.macAddress }, set: { settings.macAddress = $0 })
-    }
-    private func passwordBinding() -> Binding<String> {
-        Binding(get: { settings.xtreamPassword }, set: { settings.xtreamPassword = $0 })
-    }
     private func removeAddon(_ url: String) {
-        settings.stremioAddonUrls.removeAll { $0 == url }
-        Task { await store.refresh() }
+        draftAddons.removeAll { $0 == url }
+        configurationError = nil
+        savedNote = false
     }
 }

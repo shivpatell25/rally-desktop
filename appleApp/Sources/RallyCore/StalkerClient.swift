@@ -116,6 +116,12 @@ public final class StalkerClient: @unchecked Sendable {
         return await getChannels()
     }
 
+    /// Drops the in-memory catalog (credential change forces a new handshake
+    /// instead of reusing the old session's channels).
+    public func clearChannelCache() {
+        lock.withLock { channels = nil; guides.removeAll() }
+    }
+
     private func fetchChannels() async -> [IptvChannel] {
         var all: [[String: Any]] = []
         if let js = try? await get(type: "itv", action: "get_all_channels") {

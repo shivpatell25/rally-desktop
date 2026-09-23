@@ -68,19 +68,28 @@ final class RallyStore: ObservableObject {
 
     /// Single-sheet router: one presentation slot, so detail → player always surfaces.
     func show(_ sheet: AppSheet?) { self.sheet = sheet }
-
-    var stremioClient: StremioClient { stremio }
-    var espnClient: EspnClient { espn }
-    var stalkerClient: StalkerClient { providers().0 }
-    var xtreamClient: XtreamClient { providers().1 }
-    private let stremio = StremioClient()
-    private let updates = UpdateChecker()
-    private var stalker: StalkerClient?
-    private var xtream: XtreamClient?
     func refreshChannels() async {
         let (s, x) = providers()
         channels = settings.iptvProvider == .stalker ? await s.getChannels() : await x.getChannels()
     }
+
+    /// Credential change: drop the auth token and both in-memory catalogs so
+    /// the next load performs a fresh handshake (Android `saveConfiguration`).
+    func resetProviderSession() {
+        settings.authToken = ""
+        let (s, x) = providers()
+        s.clearChannelCache()
+        x.clearChannelCache()
+        channels = []
+    }
+    private let stremio = StremioClient()
+    private let updates = UpdateChecker()
+    private var stalker: StalkerClient?
+    private var xtream: XtreamClient?
+    var stremioClient: StremioClient { stremio }
+    var espnClient: EspnClient { espn }
+    var stalkerClient: StalkerClient { providers().0 }
+    var xtreamClient: XtreamClient { providers().1 }
 
     func ensureChannels() async {
         if channels.isEmpty { await refreshChannels() }
@@ -214,13 +223,17 @@ enum LaunchArgs {
         let key = String(arg.dropFirst(7))
         return key.isEmpty ? nil : key
     }
+    /// Debug: skip the first-run gate for verification screenshots.
+    static var skipOnboarding: Bool {
+        CommandLine.arguments.contains("--skip-onboarding")
+    }
 }
-
 struct ContentView: View {
     @EnvironmentObject var store: RallyStore
     @State private var destination: TvDestination = LaunchArgs.destination
     @State private var slideEdge: Edge = .trailing
     @State private var prevTab = 0
+    @State private var showOnboarding = false
     private func tabIndex(_ d: TvDestination) -> Int {
         switch d { case .home: 0; case .live: 1; case .leagues: 2; case .highlights: 3; case .myTeams: 4 }
     }
@@ -251,6 +264,14 @@ struct ContentView: View {
                         .environmentObject(store.settings)
                         .transition(.opacity)
                 }
+                // First-run gate: onboarding until setup is saved or a source exists.
+                if showOnboarding {
+                    OnboardingView {
+                        showOnboarding = false
+                        store.show(.settings)
+                    }
+                    .transition(.opacity)
+                }
             }
             .environment(\.tvMetrics, TvMetrics(width: geo.size.width))
         }
@@ -261,8 +282,8 @@ struct ContentView: View {
         }
         .background { AmbientBackground() }
         .task {
+            showOnboarding = !LaunchArgs.skipOnboarding && store.settings.needsOnboarding
             await store.refresh()
-            await store.checkUpdates()
             if let league = LaunchArgs.league { store.pendingLeague = league }
             if LaunchArgs.openSettings { store.show(.settings) }
             if let id = LaunchArgs.eventId {

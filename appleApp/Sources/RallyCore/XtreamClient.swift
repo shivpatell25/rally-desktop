@@ -111,6 +111,10 @@ public final class XtreamClient: @unchecked Sendable {
         return await getChannels()
     }
 
+    /// Drops the in-memory catalog without forcing re-auth (credential change).
+    public func clearChannelCache() {
+        lock.withLock { cachedChannels = []; cachedAt = .distantPast; guides.removeAll() }
+    }
     private func fetchChannels(_ a: Account) async -> [IptvChannel] {
         async let cats = requestJson(playerApi(a, action: "get_live_categories"))
         async let streams = requestJson(playerApi(a, action: "get_live_streams"))
