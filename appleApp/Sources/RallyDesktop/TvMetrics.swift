@@ -1,3 +1,4 @@
+import RallyCore
 import SwiftUI
 
 /// Single scaling spine for all TV surfaces. Anchored at 1512pt (dev width):
@@ -34,9 +35,61 @@ struct TvMetricsKey: EnvironmentKey {
     static let defaultValue = TvMetrics.reference
 }
 
+/// Accessibility intent, set once in ContentView from Settings (high-contrast
+/// focus rings, motion calming). System Reduce Motion also feeds the motion flag.
+struct RallyHighContrastKey: EnvironmentKey {
+    static let defaultValue = false
+}
+struct RallyReduceMotionKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var tvMetrics: TvMetrics {
         get { self[TvMetricsKey.self] }
         set { self[TvMetricsKey.self] = newValue }
+    }
+    var rallyHighContrast: Bool {
+        get { self[RallyHighContrastKey.self] }
+        set { self[RallyHighContrastKey.self] = newValue }
+    }
+    var rallyReduceMotion: Bool {
+        get { self[RallyReduceMotionKey.self] }
+        set { self[RallyReduceMotionKey.self] = newValue }
+    }
+}
+extension View {
+    /// Focus ring honoring high-contrast (3pt + brighter cyan).
+    func rallyFocusRing(active: Bool, radius: CGFloat = 10,
+                        activeColor: Color = RallyTheme.rallyCyan,
+                        inactiveColor: Color = RallyTheme.glassBorder) -> some View {
+        modifier(RallyFocusRing(active: active, radius: radius,
+                                activeColor: activeColor, inactiveColor: inactiveColor))
+    }
+    func rallyAnimation<V: Equatable>(_ animation: Animation?, value: V) -> some View {
+        modifier(RallyAnimation(animation: animation, value: value))
+    }
+}
+
+private struct RallyFocusRing: ViewModifier {
+    @Environment(\.rallyHighContrast) private var highContrast
+    var active: Bool
+    var radius: CGFloat
+    var activeColor: Color
+    var inactiveColor: Color
+    func body(content: Content) -> some View {
+        content.overlay(RoundedRectangle(cornerRadius: radius).stroke(
+            active ? (highContrast ? .white : activeColor) : inactiveColor,
+            lineWidth: active ? (highContrast ? 3 : 2) : 1))
+    }
+}
+
+private struct RallyAnimation<V: Equatable>: ViewModifier {
+    @Environment(\.rallyReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    var animation: Animation?
+    var value: V
+    func body(content: Content) -> some View {
+        content.animation((reduceMotion || systemReduceMotion) ? nil : animation, value: value)
     }
 }

@@ -67,7 +67,19 @@ final class RallyStore: ObservableObject {
     let multiView = MultiViewState()
 
     /// Single-sheet router: one presentation slot, so detail → player always surfaces.
-    func show(_ sheet: AppSheet?) { self.sheet = sheet }
+    /// Action gate (Android TvActionGate): identical pushes within 250ms collapse,
+    /// so rapid clicks can't double-push sheets or double-fire channel loads.
+    private var lastSheetId: String?
+    private var lastSheetAt = Date.distantPast
+    func show(_ sheet: AppSheet?) {
+        if let sheet {
+            let now = Date()
+            if sheet.id == lastSheetId, now.timeIntervalSince(lastSheetAt) < 0.25 { return }
+            lastSheetId = sheet.id
+            lastSheetAt = now
+        }
+        self.sheet = sheet
+    }
     func refreshChannels() async {
         let (s, x) = providers()
         channels = settings.iptvProvider == .stalker ? await s.getChannels() : await x.getChannels()
@@ -156,6 +168,7 @@ final class RallyStore: ObservableObject {
         }
         let fresh = await board
         if !fresh.isEmpty {
+            evaluateAlerts(previous: events, current: fresh)
             events = fresh
             scheduleStore.save(fresh)
         } else if events.isEmpty {
@@ -163,6 +176,20 @@ final class RallyStore: ObservableObject {
             events = scheduleStore.loadAny() ?? []
         }
         self.addonManifests = manifests
+    }
+
+    let alertCenter = GameAlertCenter()
+
+    /// Diff the refresh against the last snapshot and notify for favorites
+    /// (Android GameAlertManager + HomeViewModel gate).
+    private func evaluateAlerts(previous: [SportEvent], current: [SportEvent]) {
+        guard settings.liveGameAlertsEnabled else { return }
+        let favIds = Set(settings.favoriteTeamProfiles.flatMap { [$0.id, $0.key] })
+        guard !favIds.isEmpty else { return }
+        let alerts = GameAlerts.evaluate(previous: previous, current: current,
+                                         favIds: favIds,
+                                         redZoneEnabled: settings.redZoneAlertsEnabled)
+        alertCenter.deliver(alerts, events: current)
     }
 
     func testConnection() async {
@@ -207,7 +234,6 @@ struct GameHighlight: Identifiable {
     var clip: HighlightClip
     var event: SportEvent
 }
-
 enum LaunchArgs {
     static var destination: TvDestination {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--tv=") }) else { return .home }
@@ -257,6 +283,13 @@ struct ContentView: View {
     @State private var slideEdge: Edge = .trailing
     @State private var prevTab = 0
     @State private var showOnboarding = false
+    @State private var lastInteraction = Date()
+    @State private var saverNow = Date()
+    /// Idle screensaver (5 min, suppressed while anything is presented).
+    private var saverActive: Bool {
+        store.settings.scoreSaverEnabled && !showOnboarding && store.sheet == nil
+            && saverNow.timeIntervalSince(lastInteraction) > 5 * 60
+    }
     private func tabIndex(_ d: TvDestination) -> Int {
         switch d { case .home: 0; case .live: 1; case .leagues: 2; case .highlights: 3; case .myTeams: 4 }
     }
@@ -293,20 +326,38 @@ struct ContentView: View {
                         showOnboarding = false
                         store.show(.settings)
                     }
-                    .transition(.opacity)
+                }
+                // Idle ambient scores sit above content, below sheets/player.
+                if saverActive {
+                    ScoreSaverOverlay()
+                        .transition(.opacity)
+                        .onTapGesture { lastInteraction = Date() }
                 }
             }
             .environment(\.tvMetrics, TvMetrics(width: geo.size.width))
+            .environment(\.rallyHighContrast, store.settings.highContrastFocus)
+            .environment(\.rallyReduceMotion, store.settings.reducedMotion)
+            .environment(\.dynamicTypeSize, store.settings.largeText ? .accessibility1 : .large)
         }
-        .animation(.smooth(duration: 0.35), value: destination)
+        .rallyAnimation(.smooth(duration: 0.35), value: destination)
         .onChange(of: destination) { next in
             slideEdge = tabIndex(next) >= prevTab ? .trailing : .leading
             prevTab = tabIndex(next)
+            lastInteraction = Date()
+        }
+        .onChange(of: store.sheet?.id) { _ in lastInteraction = Date() }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                saverNow = Date()
+            }
         }
         .background { AmbientBackground() }
         .task {
             showOnboarding = !LaunchArgs.skipOnboarding && store.settings.needsOnboarding
+            store.alertCenter.requestAuthorization()
             await store.refresh()
+            await store.checkUpdates()
             if let league = LaunchArgs.league { store.pendingLeague = league }
             if LaunchArgs.openSettings { store.show(.settings) }
             if let id = LaunchArgs.eventId {
@@ -319,6 +370,25 @@ struct ContentView: View {
             if let key = LaunchArgs.teamKey,
                let team = store.settings.favoriteTeamProfiles.first(where: { $0.key == key }) {
                 store.show(.team(team))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: GameAlertCenter.openEventNotification)) { note in
+            guard let id = note.object as? String,
+                  let e = store.events.first(where: { $0.id == id }) else { return }
+            store.show(.eventDetail(e))
+        }
+        .onOpenURL { url in
+            guard url.scheme?.lowercased() == "rally" else { return }
+            let parts = url.pathComponents.filter { $0 != "/" }
+            switch (url.host?.lowercased(), parts.first) {
+            case ("event", let id?):
+                if let e = store.events.first(where: { $0.id == id }) { store.show(.eventDetail(e)) }
+            case ("team", let key?):
+                if let team = store.settings.favoriteTeamProfiles.first(where: { $0.key == key }) {
+                    store.show(.team(team))
+                }
+            default:
+                break
             }
         }
         .sheet(item: Binding<AppSheet?>(
@@ -362,7 +432,6 @@ struct HomeView: View {
             }
             .padding(20)
         }
-        .background { AmbientBackground() }
         .overlay { if store.isLoading && store.events.isEmpty { ProgressView("Loading games…") } }
     }
 }
@@ -372,7 +441,7 @@ struct LeaguesView: View {
     @EnvironmentObject var settings: SettingsStore
     var body: some View {
         List {
-            ForEach(settings.sportsOrder, id: \.self) { league in
+            ForEach(settings.sportsOrder.filter { settings.isLeagueEnabled($0) }, id: \.self) { league in
                 let games = store.events.filter { $0.league == league }
                 if !games.isEmpty {
                     Section("\(league) (\(games.count))") {
@@ -391,14 +460,45 @@ struct SearchView: View {
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
     @State private var query = ""
+    @State private var debouncedQuery = ""
+    @State private var generation = 0
+    @State private var addonStreams: [(event: SportEvent, option: StremioStreamOption)] = []
+    @State private var streamsLoading = false
+    @State private var indexReady = false
     var body: some View {
         VStack {
-            TextField("Search teams, games, channels", text: $query)
+            TextField("Search teams, games, leagues, channels", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .padding([.horizontal, .top])
+                .onChange(of: query) { _ in
+                    generation += 1
+                    let current = generation
+                    Task {
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        if current == generation { debouncedQuery = query }
+                    }
+                }
+            if debouncedQuery.isEmpty && !store.events.isEmpty { indexReadyNote }
             List {
+                if !filteredLeagues.isEmpty {
+                    Section("Leagues") {
+                        ForEach(filteredLeagues, id: \.self) { league in
+                            HStack {
+                                Text(league)
+                                Spacer()
+                                Text("\(store.events.filter { $0.league == league }.count) games")
+                                    .font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                store.pendingLeague = league
+                                store.show(nil)
+                            }
+                        }
+                    }
+                }
                 if !filteredTeams.isEmpty {
-                    Section("Teams") {
+                    Section("My Teams") {
                         ForEach(filteredTeams) { team in
                             HStack {
                                 Text(team.name)
@@ -410,17 +510,23 @@ struct SearchView: View {
                         }
                     }
                 }
-                ForEach(filteredEvents) { event in
-                    GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
+                if !filteredEvents.isEmpty {
+                    Section("Games") {
+                        ForEach(filteredEvents) { event in
+                            GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
+                        }
+                    }
                 }
-                if !query.isEmpty {
-                    Section("Channels") {
+                if !filteredChannels.isEmpty {
+                    Section("Live TV") {
                         ForEach(filteredChannels) { channel in
                             HStack {
                                 Text(channel.name)
                                 Spacer()
                                 if let now = channel.guide?.now?.title {
                                     Text(now).font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                                } else if let next = channel.guide?.next?.title {
+                                    Text("Next · \(next)").font(.caption).foregroundStyle(RallyTheme.textTertiary)
                                 }
                             }
                             .contentShape(Rectangle())
@@ -428,29 +534,99 @@ struct SearchView: View {
                         }
                     }
                 }
+                if streamsLoading {
+                    Section("Addon Streams") {
+                        ProgressView().frame(maxWidth: .infinity)
+                    }
+                } else if !addonStreams.isEmpty {
+                    Section("Addon Streams") {
+                        ForEach(addonStreams, id: \.option.streamUrl) { item in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.option.title).lineLimit(1)
+                                    Text(item.event.name).font(.caption).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
+                                }
+                                Spacer()
+                                if let addon = item.option.addonName {
+                                    Text(addon).font(.caption).foregroundStyle(RallyTheme.textTertiary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture { store.show(.player(event: item.event, channel: nil)) }
+                        }
+                    }
+                }
+                if !debouncedQuery.isEmpty && filteredLeagues.isEmpty && filteredTeams.isEmpty
+                    && filteredEvents.isEmpty && filteredChannels.isEmpty && addonStreams.isEmpty && !streamsLoading {
+                    Text("No results found.").foregroundStyle(RallyTheme.textSecondary)
+                }
             }
         }
         .background { AmbientBackground() }
+        .task(id: debouncedQuery) { await runSearch() }
+        .task { indexReady = !store.events.isEmpty }
+    }
+    private var indexReadyNote: some View {
+        Text(indexReady ? "Index ready · \(store.events.count) games · \(store.channels.count) channels"
+                        : "Building index…")
+            .font(.caption).foregroundStyle(RallyTheme.textTertiary)
     }
     private var filteredTeams: [FavoriteTeam] {
-        guard !query.isEmpty else { return Array(settings.favoriteTeamProfiles.prefix(12)) }
-        let q = query.lowercased()
+        guard !debouncedQuery.isEmpty else { return Array(settings.favoriteTeamProfiles.prefix(12)) }
+        let q = debouncedQuery.lowercased()
         return settings.favoriteTeamProfiles.filter {
             $0.name.lowercased().contains(q) || $0.abbreviation.lowercased().contains(q)
         }
     }
     private var filteredEvents: [SportEvent] {
-        guard !query.isEmpty else { return Array(store.events.prefix(20)) }
-        let q = query.lowercased()
+        guard !debouncedQuery.isEmpty else { return Array(store.events.prefix(20)) }
+        let q = debouncedQuery.lowercased()
         return store.events.filter {
             $0.name.lowercased().contains(q)
             || ($0.homeTeam?.name.lowercased().contains(q) == true)
             || ($0.awayTeam?.name.lowercased().contains(q) == true)
-        }
+        }.prefix(20).map { $0 }
+    }
+    private var filteredLeagues: [String] {
+        guard !debouncedQuery.isEmpty else { return [] }
+        let q = debouncedQuery.lowercased()
+        return EspnClient.leagues.map(\.league).filter { $0.lowercased().contains(q) }.prefix(8).map { $0 }
     }
     private var filteredChannels: [IptvChannel] {
-        let q = query.lowercased()
-        return store.channels.filter { $0.name.lowercased().contains(q) }.prefix(30).map { $0 }
+        let q = debouncedQuery.lowercased()
+        guard !q.isEmpty else { return [] }
+        return store.channels.filter {
+            $0.name.lowercased().contains(q) || $0.number.contains(q)
+                || ($0.guide?.now?.title.lowercased().contains(q) == true)
+                || ($0.guide?.next?.title.lowercased().contains(q) == true)
+        }.prefix(24).map { $0 }
+    }
+    /// Addon-stream lookup only for queries of 3+ chars (Android SearchViewModel).
+    private func runSearch() async {
+        addonStreams = []
+        guard debouncedQuery.count >= 3 else { streamsLoading = false; return }
+        streamsLoading = true
+        defer { streamsLoading = false }
+        let q = debouncedQuery.lowercased()
+        let targets = filteredEvents.prefix(5)
+        var out: [(event: SportEvent, option: StremioStreamOption)] = []
+        for event in targets {
+            for base in settings.stremioAddonUrls {
+                let opts = await store.stremioClient.findStreams(for: event, addonBase: base)
+                for opt in opts where opt.isDirectPlayable
+                    && (opt.title.lowercased().contains(q) || (opt.description?.lowercased().contains(q) == true)) {
+                    out.append((event, opt))
+                    if out.count >= 20 { break }
+                }
+                if out.count >= 20 { break }
+            }
+            if out.count >= 20 { break }
+        }
+        addonStreams = out
+        // Enrich the visible channel rows with guides (first 8, guarded).
+        for channel in filteredChannels.prefix(8) where channel.guide == nil {
+            _ = await store.guide(for: channel)
+        }
     }
 }
 

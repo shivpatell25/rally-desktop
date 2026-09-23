@@ -65,7 +65,7 @@ struct PagedShelf<Item, Content: View>: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: page)
+            .rallyAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: page)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 20).onEnded { drag in
                 if drag.translation.width < -60 {

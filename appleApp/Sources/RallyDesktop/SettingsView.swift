@@ -1,6 +1,19 @@
+import AppKit
 import RallyCore
 import SwiftUI
+import UniformTypeIdentifiers
 
+struct PersonalizationDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: Data
+    init(data: Data = Data()) { self.data = data }
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
 /// TV-glass settings: icon rail with status badges, identity header,
 /// provider cards, addon cards with live metadata, descriptive toggles.
 struct SettingsView: View {
@@ -9,6 +22,9 @@ struct SettingsView: View {
     @State private var newAddon = ""
     @State private var section = 0
     @State private var testing = false
+    @State private var exportingBackup = false
+    @State private var importingBackup = false
+    @State private var backupMessage: String?
     @State private var catalogLeague = "NFL"
     @State private var catalogTeams: [Team] = []
     @State private var catalogFilter = ""
@@ -291,11 +307,37 @@ struct SettingsView: View {
     private var sportsPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             panelTitle("SPORTS", "Leagues and order")
-            glassCard {
-                Text("LEAGUE ORDER").font(.system(size: 11, weight: .bold)).tracking(1)
+            if settings.enabledLeagues.isEmpty {
+                Text("All leagues enabled").font(.system(size: 12))
                     .foregroundStyle(RallyTheme.textSecondary)
-                Text(settings.sportsOrder.joined(separator: " · "))
-                    .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary)
+            }
+            glassCard {
+                ForEach(Array(settings.sportsOrder.enumerated()), id: \.element) { index, league in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(league).font(.system(size: 14, weight: .semibold))
+                            Text(settings.favoriteSports.contains(league) ? "Favorite · \(settings.isLeagueEnabled(league) ? "Shown" : "Hidden")"
+                                : (settings.isLeagueEnabled(league) ? "Shown" : "Hidden"))
+                                .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button(settings.favoriteSports.contains(league) ? "★" : "☆") {
+                            settings.toggleFavoriteSport(league)
+                        }.font(.system(size: 15)).buttonStyle(.plain)
+                        Toggle("", isOn: Binding(
+                            get: { settings.isLeagueEnabled(league) },
+                            set: { _ in settings.toggleLeague(league) }
+                        )).labelsHidden().scaleEffect(0.85)
+                        Button("↑") { settings.moveSportUp(league) }
+                            .disabled(index == 0).font(.system(size: 13)).buttonStyle(.plain)
+                            .foregroundStyle(index == 0 ? RallyTheme.textTertiary : RallyTheme.textPrimary)
+                        Button("↓") { settings.moveSportDown(league) }
+                            .disabled(index == settings.sportsOrder.count - 1)
+                            .font(.system(size: 13)).buttonStyle(.plain)
+                            .foregroundStyle(index == settings.sportsOrder.count - 1 ? RallyTheme.textTertiary : RallyTheme.textPrimary)
+                    }
+                    Divider().opacity(0.2)
+                }
             }
         }
     }
@@ -407,6 +449,12 @@ struct SettingsView: View {
                 toggleRow("Reduce motion", "Calm focus and transitions", $settings.reducedMotion)
                 Divider().opacity(0.2)
                 toggleRow("Large text", "Bigger scores and titles", $settings.largeText)
+                Divider().opacity(0.2)
+                toggleRow("High-contrast focus", "Brighter, thicker selection rings", $settings.highContrastFocus)
+                Divider().opacity(0.2)
+                toggleRow("Spoken score summaries", "Announce live scores on Home", $settings.spokenScoreSummaries)
+                Divider().opacity(0.2)
+                toggleRow("Score saver", "Ambient scores after 5 idle minutes", $settings.scoreSaverEnabled)
             }
         }
     }
@@ -472,14 +520,71 @@ struct SettingsView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Credentials on this Mac").font(.system(size: 14, weight: .semibold))
-                        Text("Portal, addons, favorites and tokens").font(.system(size: 11))
+                        Text("Portal, server, MAC, and tokens — favorites and prefs survive")
+                            .font(.system(size: 11))
                             .foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
                     tvButton("Clear credentials", destructive: true) { store.settings.clearCredentials() }
                 }
             }
+            glassCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("PERSONALIZATION").font(.system(size: 11, weight: .bold)).tracking(1)
+                        .foregroundStyle(RallyTheme.textSecondary)
+                    Text("Leagues, favorites, alerts, playback, and access — never credentials or addons.")
+                        .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                    HStack(spacing: 10) {
+                        tvButton("Export…") { exportingBackup = true }
+                        tvButton("Import…") { importingBackup = true }
+                        tvButton("Copy support report") { copySupportReport() }
+                    }
+                    if let backupMessage {
+                        Text(backupMessage).font(.system(size: 12))
+                            .foregroundStyle(RallyTheme.textSecondary)
+                    }
+                }
+            }
         }
+        .fileExporter(isPresented: $exportingBackup, document: backupDocument(), contentType: .json,
+                      defaultFilename: "rally-personalization.json") { result in
+            backupMessage = (try? result.get()) != nil ? "Exported." : "Export cancelled."
+        }
+        .fileImporter(isPresented: $importingBackup, allowedContentTypes: [.json]) { result in
+            do {
+                let url = try result.get()
+                guard url.startAccessingSecurityScopedResource() else { backupMessage = "Couldn't read that file."; return }
+                defer { url.stopAccessingSecurityScopedResource() }
+                backupMessage = store.settings.importPersonalization(try Data(contentsOf: url))
+                    ? "Imported — your leagues, teams, and prefs are restored."
+                    : "That file isn't Rally personalization."
+            } catch {
+                backupMessage = "Import failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func backupDocument() -> PersonalizationDocument {
+        PersonalizationDocument(data: store.settings.exportPersonalization() ?? Data())
+    }
+
+    /// Scrubbed report: versions and counts only, never URLs, tokens, or MACs.
+    private func copySupportReport() {
+        let s = store.settings
+        let lines = [
+            "Rally for macOS \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")",
+            "Provider: \(s.iptvProvider) configured=\(!s.portalUrl.isEmpty || !s.xtreamServerUrl.isEmpty)",
+            "Events: \(store.events.count) · Channels: \(store.channels.count) · Addons: \(s.stremioAddonUrls.count)",
+            "Leagues: \(s.sportsOrder.joined(separator: ","))",
+            "Favorites: \(s.favoriteTeamProfiles.count) teams",
+            "Alerts: live=\(s.liveGameAlertsEnabled) redzone=\(s.redZoneAlertsEnabled)",
+            "Viewing: latency=\(s.lowLatencyMode) norm=\(s.audioNormalizationEnabled) adaptive=\(s.adaptiveQualityEnabled)",
+            "Access: motion=\(s.reducedMotion) large=\(s.largeText) contrast=\(s.highContrastFocus) spoken=\(s.spokenScoreSummaries)",
+            "Update: \(store.update?.tag ?? "up-to-date")\(store.updateError.map { " error=\($0)" } ?? "")",
+        ]
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+        backupMessage = "Support report copied — paste it anywhere."
     }
 
     // MARK: Chrome (TV glass language)

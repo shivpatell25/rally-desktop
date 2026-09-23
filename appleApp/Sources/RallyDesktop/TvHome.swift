@@ -101,7 +101,7 @@ struct RallyTopBar: View {
             .padding(.horizontal, 16).padding(.vertical, 8)
             .frame(width: 412)
             .rallyCapsule()
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: destination)
+            .rallyAnimation(.spring(response: 0.35, dampingFraction: 0.8), value: destination)
             Spacer()
             HStack(spacing: 12) {
                 Button(action: onSearch) {
@@ -191,7 +191,7 @@ extension RallyStore {
         }
     }
     var leagueShelves: [(title: String, events: [SportEvent])] {
-        settings.sportsOrder.compactMap { league in
+        settings.sportsOrder.filter { settings.isLeagueEnabled($0) }.compactMap { league in
             let evs = events.filter { $0.league == league }
             return evs.isEmpty ? nil : (league, evs)
         }
@@ -211,8 +211,15 @@ struct TvHomeDashboard: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 12) {
                 TvHero(featured: store.featuredEvent, mode: store.heroMode, focus: $focus)
+                if store.settings.spokenScoreSummaries {
+                    Button("Announce scores") {
+                        ScoreAnnouncer.announce(Array((store.liveEvents + store.upcomingEvents).prefix(5)))
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RallyTheme.rallyCyan)
+                    .buttonStyle(.plain)
+                }
                 liveShelf
-                sportShelf
             }
             .padding(.horizontal, m.hPad)
             .padding(.top, 16).padding(.bottom, 18)
@@ -442,9 +449,8 @@ struct TvHero: View {
                 .padding(.horizontal, 22).padding(.vertical, 10)
                 .background(primary ? RallyTheme.offWhite : Color.white.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8)
-                    .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : (primary ? Color.clear : RallyTheme.glassBorder),
-                            lineWidth: focus.wrappedValue == id ? 2 : 1))
+                .rallyFocusRing(active: focus.wrappedValue == id, radius: 8,
+                               inactiveColor: primary ? Color.clear : RallyTheme.glassBorder)
                 .scaleEffect(focus.wrappedValue == id ? 1.02 : 1.0)
         }
         .buttonStyle(.plain)
@@ -509,11 +515,9 @@ struct TvLiveCard: View {
             }
             .frame(width: (size ?? m.liveCard).width, height: (size ?? m.liveCard).height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
-                        lineWidth: focus.wrappedValue == id ? 2 : 1))
+            .rallyFocusRing(active: focus.wrappedValue == id, radius: 10)
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+                .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
@@ -586,7 +590,7 @@ struct TvSportCard: View {
                 .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
                         lineWidth: focus.wrappedValue == id ? 2 : 1))
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+                .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
@@ -687,11 +691,10 @@ struct TvHighlightCard: View {
             .frame(width: (size ?? CGSize(width: 320, height: 235)).width,
                    height: (size ?? CGSize(width: 320, height: 235)).height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22),
-                        lineWidth: focus.wrappedValue == id ? 2 : 1))
+            .rallyFocusRing(active: focus.wrappedValue == id, radius: 10,
+                               inactiveColor: Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22))
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+            .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)

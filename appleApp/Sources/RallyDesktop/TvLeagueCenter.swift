@@ -291,11 +291,9 @@ struct TvPortraitCard: View {
             }
             .frame(width: m.portraitCard.width, height: m.portraitCard.height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
-                        lineWidth: focus.wrappedValue == id ? 2 : 1))
+            .rallyFocusRing(active: focus.wrappedValue == id, radius: 10)
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+                .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
@@ -407,11 +405,10 @@ struct TvDirectoryCard: View {
             .frame(width: (size ?? CGSize(width: 220, height: 220)).width,
                    height: (size ?? CGSize(width: 220, height: 220)).height)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(focus.wrappedValue == id ? RallyTheme.rallyCyan : Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22),
-                        lineWidth: focus.wrappedValue == id ? 2 : 1))
+            .rallyFocusRing(active: focus.wrappedValue == id, radius: 10,
+                               inactiveColor: Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22))
             .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+            .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)

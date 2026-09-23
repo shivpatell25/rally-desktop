@@ -128,6 +128,10 @@ public final class SettingsStore: ObservableObject {
     @Published public var enabledLeagues: Set<String> {
         didSet { defaults.set(Array(enabledLeagues), forKey: "enabled_leagues") }
     }
+    /// Leagues the user favorites (promoted). Empty means no preference.
+    @Published public var favoriteSports: Set<String> {
+        didSet { defaults.set(Array(favoriteSports), forKey: "favorite_sports") }
+    }
     @Published public var favoriteTeams: Set<String> {
         didSet { defaults.set(Array(favoriteTeams), forKey: "favorite_teams") }
     }
@@ -160,6 +164,15 @@ public final class SettingsStore: ObservableObject {
     @Published public var largeText: Bool {
         didSet { defaults.set(largeText, forKey: "large_text") }
     }
+    @Published public var highContrastFocus: Bool {
+        didSet { defaults.set(highContrastFocus, forKey: "high_contrast_focus") }
+    }
+    @Published public var spokenScoreSummaries: Bool {
+        didSet { defaults.set(spokenScoreSummaries, forKey: "spoken_score_summaries") }
+    }
+    @Published public var scoreSaverEnabled: Bool {
+        didSet { defaults.set(scoreSaverEnabled, forKey: "score_saver_enabled") }
+    }
     @Published public var setupComplete: Bool {
         didSet { defaults.set(setupComplete, forKey: "setup_complete") }
     }
@@ -191,6 +204,7 @@ public final class SettingsStore: ObservableObject {
             stremioAddonUrls = [Self.defaultAddon]
         }
         enabledLeagues = Set(defaults.stringArray(forKey: "enabled_leagues") ?? [])
+        favoriteSports = Set(defaults.stringArray(forKey: "favorite_sports") ?? [])
         favoriteTeams = Set(defaults.stringArray(forKey: "favorite_teams") ?? [])
         if let data = defaults.data(forKey: "favorite_team_profiles_v2"),
            let list = try? JSONDecoder().decode([FavoriteTeam].self, from: data) {
@@ -205,6 +219,9 @@ public final class SettingsStore: ObservableObject {
         adaptiveQualityEnabled = defaults.object(forKey: "adaptive_quality_enabled") as? Bool ?? true
         reducedMotion = defaults.bool(forKey: "reduced_motion")
         largeText = defaults.bool(forKey: "large_text")
+        highContrastFocus = defaults.bool(forKey: "high_contrast_focus")
+        spokenScoreSummaries = defaults.bool(forKey: "spoken_score_summaries")
+        scoreSaverEnabled = defaults.object(forKey: "score_saver_enabled") as? Bool ?? true
         setupComplete = defaults.bool(forKey: "setup_complete")
         channelCacheIdentity = defaults.string(forKey: "channel_cache_identity") ?? ""
         lastUpdateCheckMs = defaults.double(forKey: "last_update_check_ms")
@@ -297,10 +314,107 @@ public final class SettingsStore: ObservableObject {
         SHA256.hash(data: Data(target.utf8)).prefix(10).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Scoped clear: credentials + provider identity only. Sports order,
+    /// favorites, alerts, playback, and accessibility survive (the old version
+    /// wiped every UserDefaults key with no undo).
     public func clearCredentials() {
-        for key in defaults.dictionaryRepresentation().keys { defaults.removeObject(forKey: key) }
+        for key in ["portal_url", "xtream_server_url", "xtream_username", "mac_address",
+                    "serial_number", "device_id", "channel_cache_identity"] {
+            defaults.removeObject(forKey: key)
+        }
+        portalUrl = ""; xtreamServerUrl = ""; xtreamUsername = ""
+        serialNumber = ""; deviceId = ""; channelCacheIdentity = ""
         keychainDelete("auth_token"); keychainDelete("xtream_password")
         objectWillChange.send()
+    }
+
+    // MARK: - League curation (Android SportsSettings)
+
+    /// Empty enabled-set means all leagues (Android empty-set-means-all).
+    public func isLeagueEnabled(_ league: String) -> Bool {
+        enabledLeagues.isEmpty || enabledLeagues.contains(league)
+    }
+
+    public func toggleLeague(_ league: String) {
+        if enabledLeagues.isEmpty {
+            // All enabled: hide this one by seeding the explicit set.
+            var next = Set(sportsOrder)
+            next.remove(league)
+            enabledLeagues = next
+        } else if enabledLeagues.contains(league) {
+            enabledLeagues.remove(league)
+        } else {
+            enabledLeagues.insert(league)
+        }
+    }
+
+    public func toggleFavoriteSport(_ league: String) {
+        if favoriteSports.contains(league) { favoriteSports.remove(league) }
+        else { favoriteSports.insert(league) }
+    }
+
+    public func moveSportUp(_ league: String) {
+        guard let i = sportsOrder.firstIndex(of: league), i > 0 else { return }
+        sportsOrder.swapAt(i, i - 1)
+    }
+
+    public func moveSportDown(_ league: String) {
+        guard let i = sportsOrder.firstIndex(of: league), i < sportsOrder.count - 1 else { return }
+        sportsOrder.swapAt(i, i + 1)
+    }
+
+    // MARK: - Portable personalization (Android preferences backup, no secrets)
+
+    public struct Personalization: Codable, Sendable {
+        public var sportsOrder: [String]
+        public var enabledLeagues: [String]
+        public var favoriteSports: [String]
+        public var favoriteTeams: [String]
+        public var favoriteTeamProfiles: [FavoriteTeam]
+        public var liveGameAlertsEnabled: Bool
+        public var redZoneAlertsEnabled: Bool
+        public var lowLatencyMode: Bool
+        public var audioNormalizationEnabled: Bool
+        public var adaptiveQualityEnabled: Bool
+        public var reducedMotion: Bool
+        public var largeText: Bool
+        public var highContrastFocus: Bool
+        public var spokenScoreSummaries: Bool
+        public var scoreSaverEnabled: Bool
+    }
+
+    public func exportPersonalization() -> Data? {
+        try? JSONEncoder().encode(Personalization(
+            sportsOrder: sportsOrder, enabledLeagues: Array(enabledLeagues),
+            favoriteSports: Array(favoriteSports), favoriteTeams: Array(favoriteTeams),
+            favoriteTeamProfiles: favoriteTeamProfiles,
+            liveGameAlertsEnabled: liveGameAlertsEnabled, redZoneAlertsEnabled: redZoneAlertsEnabled,
+            lowLatencyMode: lowLatencyMode, audioNormalizationEnabled: audioNormalizationEnabled,
+            adaptiveQualityEnabled: adaptiveQualityEnabled, reducedMotion: reducedMotion,
+            largeText: largeText, highContrastFocus: highContrastFocus,
+            spokenScoreSummaries: spokenScoreSummaries, scoreSaverEnabled: scoreSaverEnabled))
+    }
+
+    /// Imports personalization only — IPTV credentials and addons never travel.
+    @discardableResult
+    public func importPersonalization(_ data: Data) -> Bool {
+        guard let p = try? JSONDecoder().decode(Personalization.self, from: data) else { return false }
+        sportsOrder = p.sportsOrder.isEmpty ? Self.defaultSportsOrder : p.sportsOrder
+        enabledLeagues = Set(p.enabledLeagues)
+        favoriteSports = Set(p.favoriteSports)
+        favoriteTeams = Set(p.favoriteTeams)
+        favoriteTeamProfiles = p.favoriteTeamProfiles
+        liveGameAlertsEnabled = p.liveGameAlertsEnabled
+        redZoneAlertsEnabled = p.redZoneAlertsEnabled
+        lowLatencyMode = p.lowLatencyMode
+        audioNormalizationEnabled = p.audioNormalizationEnabled
+        adaptiveQualityEnabled = p.adaptiveQualityEnabled
+        reducedMotion = p.reducedMotion
+        largeText = p.largeText
+        highContrastFocus = p.highContrastFocus
+        spokenScoreSummaries = p.spokenScoreSummaries
+        scoreSaverEnabled = p.scoreSaverEnabled
+        return true
     }
 
     // MARK: - Keychain

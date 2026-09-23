@@ -6,6 +6,7 @@ import SwiftUI
 struct TvLiveTv: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
+    @EnvironmentObject var settings: SettingsStore
     @State private var query = ""
     @State private var guides: [String: ChannelGuide] = [:]
     @State private var loadingGuides = false
@@ -31,6 +32,10 @@ struct TvLiveTv: View {
                         .foregroundStyle(.white)
                 }
                 Spacer()
+                Button("Reload") { Task { await reloadChannels() } }
+                    .font(.system(size: 12, weight: .semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(RallyTheme.rallyCyan)
                 TextField("Search channels", text: $query)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 260)
@@ -38,10 +43,19 @@ struct TvLiveTv: View {
             .padding(.horizontal, m.hPad).padding(.top, 10)
             if store.channels.isEmpty {
                 VStack(spacing: 10) {
-                    Text("No channels loaded").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    Text("Configure the IPTV provider in Settings, then come back.")
-                        .font(.callout).foregroundStyle(RallyTheme.textSecondary)
-                    Button("Open Settings") { store.show(.settings) }
+                    if channelsLoading {
+                        ProgressView("Loading your channels…")
+                    } else if providerConfigured {
+                        Text("Live TV is unavailable").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                        Text("The schedule is safe — the portal didn't answer. Try again.")
+                            .font(.callout).foregroundStyle(RallyTheme.textSecondary)
+                        Button("Try Again") { Task { await reloadChannels() } }
+                    } else {
+                        Text("No channels loaded").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                        Text("Configure the IPTV provider in Settings, then come back.")
+                            .font(.callout).foregroundStyle(RallyTheme.textSecondary)
+                        Button("Open Settings") { store.show(.settings) }
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -62,6 +76,20 @@ struct TvLiveTv: View {
             await loadGuides()
         }
         .onMoveCommand { _ in }
+    }
+
+    @State private var channelsLoading = false
+
+    private var providerConfigured: Bool {
+        !settings.portalUrl.isEmpty || !settings.xtreamServerUrl.isEmpty
+    }
+
+    private func reloadChannels() async {
+        guard !channelsLoading else { return }
+        channelsLoading = true
+        defer { channelsLoading = false }
+        await store.refreshChannels()
+        await loadGuides()
     }
 
     private func channelRow(_ channel: IptvChannel) -> some View {
@@ -101,9 +129,7 @@ struct TvLiveTv: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Color.white.opacity(0.05))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(
-                focus == channel.id ? RallyTheme.rallyCyan : RallyTheme.glassBorder,
-                lineWidth: focus == channel.id ? 2 : 1))
+            .rallyFocusRing(active: focus == channel.id, radius: 10)
         }
         .buttonStyle(.plain)
         .focused($focus, equals: channel.id)

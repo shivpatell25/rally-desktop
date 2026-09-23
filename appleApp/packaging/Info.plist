@@ -31,5 +31,17 @@
     <string>https://raw.githubusercontent.com/shivpatell25/rally-desktop/main/appleApp/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>__SPARKLE_PUBLIC_KEY__</string>
+    <!-- Deep links: rally://event/{id}, rally://team/{league:id}. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.shiv.rally.macos.deep-link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>rally</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
