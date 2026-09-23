@@ -172,9 +172,32 @@ final class RallyStore: ObservableObject {
         connectionStatus = ok ? "Connected" : "Failed — check URL and credentials"
     }
 
-    func checkUpdates() async {
+    @Published var checkingUpdates = false
+    @Published var updateError: String?
+    @Published var updateChecked = false
+    /// In-app updater (Sparkle feed). Instantiated once; the GitHub poll below
+    /// stays as the fallback that deep-links when nothing is staged.
+    let sparkle = SparkleUpdater()
+
+    func checkUpdates(force: Bool = false) async {
+        let now = Date().timeIntervalSince1970
+        if !force, now - settings.lastUpdateCheckMs / 1000 < 7 * 24 * 3600, updateChecked { return }
+        guard !checkingUpdates else { return }
+        checkingUpdates = true
+        defer { checkingUpdates = false }
         let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
-        self.update = await updates.check(currentVersion: current)
+        switch await updates.poll(currentVersion: current) {
+        case .available(let rel):
+            update = rel
+            updateError = nil
+        case .upToDate:
+            update = nil
+            updateError = nil
+        case .failed(let message):
+            updateError = message
+        }
+        settings.lastUpdateCheckMs = now * 1000
+        updateChecked = true
     }
 }
 

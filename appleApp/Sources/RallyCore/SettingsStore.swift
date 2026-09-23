@@ -166,6 +166,9 @@ public final class SettingsStore: ObservableObject {
     @Published public var channelCacheIdentity: String {
         didSet { defaults.set(channelCacheIdentity, forKey: "channel_cache_identity") }
     }
+    @Published public var lastUpdateCheckMs: Double {
+        didSet { defaults.set(lastUpdateCheckMs, forKey: "last_update_check_ms") }
+    }
     @Published public var sportsOrder: [String] {
         didSet { defaults.set(sportsOrder.joined(separator: ","), forKey: "sports_order") }
     }
@@ -204,6 +207,7 @@ public final class SettingsStore: ObservableObject {
         largeText = defaults.bool(forKey: "large_text")
         setupComplete = defaults.bool(forKey: "setup_complete")
         channelCacheIdentity = defaults.string(forKey: "channel_cache_identity") ?? ""
+        lastUpdateCheckMs = defaults.double(forKey: "last_update_check_ms")
         if let raw = defaults.string(forKey: "sports_order"), !raw.isEmpty {
             let saved = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             sportsOrder = saved + Self.defaultSportsOrder.filter { !saved.contains($0) }

@@ -275,6 +275,12 @@ struct SettingsView: View {
         URL(string: url)?.host ?? url
     }
 
+    private func formatBytes(_ bytes: Int64) -> String {
+        guard bytes > 0 else { return "" }
+        if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
+        return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
+    }
+
     private func versionLine(for url: String) -> String {
         if let man = store.addonManifests[url] {
             return "v\(man.version ?? "?") · \(man.catalogs?.count ?? 0) catalogs"
@@ -419,13 +425,47 @@ struct SettingsView: View {
                         Text("com.shiv.rally.macos").font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
-                    if let rel = store.update {
-                        tvButton("Download v\(rel.tag)", primary: true) {
-                            if let url = URL(string: rel.pageUrl) { NSWorkspace.shared.open(url) }
+                    if store.checkingUpdates {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Checking…").font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                    } else if let rel = store.update {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            tvButton("Download v\(rel.tag)", primary: true) {
+                                if let url = URL(string: rel.assetUrl) { NSWorkspace.shared.open(url) }
+                            }
+                            Text(formatBytes(rel.assetSize)).font(.system(size: 10))
+                                .foregroundStyle(RallyTheme.textTertiary)
+                        }
+                        if !rel.notes.isEmpty {
+                            Text(String(rel.notes.prefix(180))).font(.system(size: 11))
+                                .foregroundStyle(RallyTheme.textSecondary).lineLimit(3)
+                                .frame(maxWidth: 300, alignment: .trailing)
+                        }
+                    } else if let error = store.updateError {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text(error).font(.system(size: 12)).foregroundStyle(RallyTheme.liveRed)
+                                .frame(maxWidth: 300, alignment: .trailing)
+                            tvButton("Retry") { Task { await store.checkUpdates(force: true) } }
                         }
                     } else {
-                        tvButton("Check for updates") { Task { await store.checkUpdates() } }
+                        if store.updateChecked {
+                            Text("You're up to date").font(.system(size: 12))
+                                .foregroundStyle(RallyTheme.textSecondary)
+                        }
+                        tvButton("Check for updates") { Task { await store.checkUpdates(force: true) } }
                     }
+                }
+            }
+            glassCard {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Automatic updates").font(.system(size: 14, weight: .semibold))
+                        Text("Sparkle feed — installs staged releases in-app")
+                            .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                    }
+                    Spacer()
+                    tvButton("Check now", primary: true) { store.sparkle.checkForUpdates() }
+                        .disabled(!store.sparkle.canCheckForUpdates)
                 }
             }
             glassCard {
