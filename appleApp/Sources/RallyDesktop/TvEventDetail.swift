@@ -9,6 +9,10 @@ struct TvEventDetail: View {
     @EnvironmentObject var settings: SettingsStore
     @State private var teamStats: [TeamStatComparison] = []
     @State private var leaders: [PlayerLeader] = []
+    @State private var clips: [HighlightClip] = []
+    @State private var liveEvent: SportEvent?
+    /// Live override: polling refreshes scores without reopening the page.
+    private var ev: SportEvent { liveEvent ?? event }
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
@@ -18,24 +22,109 @@ struct TvEventDetail: View {
                     outlookPanel
                     infoPanel
                 }
+                if !leaders.isEmpty {
+                    leadersPanel
+                }
+                if !clips.isEmpty {
+                    clipsPanel
+                }
             }
             .padding(.horizontal, m.hPad).padding(.vertical, 12)
         }
         .background { AmbientBackground() }
-        .task { await loadDetail() }
+        .task {
+            await loadDetail()
+            await pollLive()
+        }
     }
 
     private func loadDetail() async {
-        guard let path = EspnClient.path(forLeague: event.league) else { return }
+        guard let path = EspnClient.path(forLeague: ev.league) else { return }
         let detail = await store.espnClient.fetchSummary(
-            sport: path.sport, league: path.path, eventId: event.id,
-            awayAbbr: event.awayTeam?.abbreviation, homeAbbr: event.homeTeam?.abbreviation)
+            sport: path.sport, league: path.path, eventId: ev.id,
+            awayAbbr: ev.awayTeam?.abbreviation, homeAbbr: ev.homeTeam?.abbreviation)
         teamStats = detail.teamStats
         leaders = detail.leaders
+        clips = detail.clips
+    }
+    /// plus the score line every 30s while the game is live.
+    private func pollLive() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, isLive else { continue }
+            await loadDetail()
+            if let path = EspnClient.path(forLeague: ev.league),
+               let fresh = try? await store.espnClient.fetchScoreboard(sport: path.sport, league: path.path,
+                   domainLeague: ev.league),
+               let updated = fresh.first(where: { $0.id == ev.id }) {
+                liveEvent = updated
+            }
+        }
     }
 
-    private var isLive: Bool { event.status == .live || event.status == .halftime }
-    private var isFinal: Bool { event.status == .finished }
+    private var leadersPanel: some View {
+        panel(title: "TOP PERFORMERS", trailing: nil) {
+            ForEach([ev.awayTeam, ev.homeTeam].compactMap { $0 }, id: \.id) { team in
+                let rows = teamLeaders(team)
+                if !rows.isEmpty {
+                    Text(team.abbreviation).font(.system(size: 10, weight: .bold)).tracking(0.8)
+                        .foregroundStyle(RallyTheme.textSecondary)
+                    ForEach(rows, id: \.playerShortName) { leader in
+                        HStack(spacing: 8) {
+                            if let headshot = leader.headshotUrl, let link = URL(string: headshot) {
+                                AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
+                                    Color.clear
+                                }
+                                .frame(width: 30, height: 30).clipShape(Circle())
+                            }
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(leader.playerShortName).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                                Text(leader.statDisplay).font(.system(size: 11)).foregroundStyle(RallyTheme.rallyCyan)
+                            }
+                            Spacer()
+                            Text(leader.category).font(.system(size: 10)).foregroundStyle(RallyTheme.textTertiary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var clipsPanel: some View {
+        panel(title: "GAME CLIPS", trailing: "\(clips.count)") {
+            ForEach(clips.prefix(6)) { clip in
+                Button {
+                    store.show(.player(event: ev, channel: nil, clip: clip))
+                } label: {
+                    HStack(spacing: 10) {
+                        if let thumb = clip.thumbnailUrl, let link = URL(string: thumb) {
+                            AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fill) } placeholder: {
+                                RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)).frame(width: 96, height: 54)
+                            }
+                            .frame(width: 96, height: 54).clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(clip.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).lineLimit(2)
+                            if let dur = clip.durationSeconds {
+                                Text("\(dur / 60):\(String(format: "%02d", dur % 60))")
+                                    .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
+                            }
+                        }
+                        Spacer()
+                        if clip.streamUrl != nil {
+                            Image(systemName: "play.circle.fill").font(.system(size: 22))
+                                .foregroundStyle(RallyTheme.rallyCyan)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(clip.streamUrl == nil)
+            }
+        }
+    }
+
+    private var isLive: Bool { ev.status == .live || ev.status == .halftime }
+    private var isFinal: Bool { ev.status == .finished }
 
     private var detailHero: some View {
         ZStack(alignment: .leading) {
@@ -61,30 +150,30 @@ struct TvEventDetail: View {
                             .padding(.horizontal, 12).padding(.vertical, 6)
                             .background(isLive ? RallyTheme.liveRed : Color.white.opacity(0.19))
                             .clipShape(Capsule())
-                        Text(Artwork.displayLeague(event.league).uppercased())
+                        Text(Artwork.displayLeague(ev.league).uppercased())
                             .font(.system(size: 12, weight: .semibold)).tracking(1.2)
                             .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                     }
                     HStack(spacing: 0) {
-                        teamHero(event.awayTeam).frame(maxWidth: .infinity)
+                        teamHero(ev.awayTeam).frame(maxWidth: .infinity)
                         VStack(spacing: 2) {
                             Text(isLive || isFinal
-                                ? "\(event.scoreAway.map(String.init) ?? "–")  –  \(event.scoreHome.map(String.init) ?? "–")" : "VS")
+                                ? "\(ev.scoreAway.map(String.init) ?? "–")  –  \(ev.scoreHome.map(String.init) ?? "–")" : "VS")
                                 .font(.system(size: 34, weight: .bold)).foregroundStyle(.white)
-                            Text(isLive ? (event.gameStatusDetail ?? "") : isFinal ? "FINAL"
-                                : event.startTime.formatted(.dateTime.month(.abbreviated).day().hour().minute()).uppercased())
+                            Text(isLive ? (ev.gameStatusDetail ?? "") : isFinal ? "FINAL"
+                                : ev.startTime.formatted(.dateTime.month(.abbreviated).day().hour().minute()).uppercased())
                                 .font(.system(size: 10, weight: .semibold)).tracking(0.8)
                                 .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
-                            if let ctx = event.gameStatusDetail, isLive == false, isFinal == false {
+                            if let ctx = ev.gameStatusDetail, isLive == false, isFinal == false {
                                 Text(ctx.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.8)
                                     .foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
                             }
                         }
                         .frame(width: m.s(170))
-                        teamHero(event.homeTeam).frame(maxWidth: .infinity)
+                        teamHero(ev.homeTeam).frame(maxWidth: .infinity)
                     }
                     .frame(maxWidth: m.s(640))
-                    Text([event.venue, event.gameStatusDetail].compactMap { $0?.isEmpty == false ? $0 : nil }
+                    Text([ev.venue, ev.gameStatusDetail].compactMap { $0?.isEmpty == false ? $0 : nil }
                         .joined(separator: "  ·  "))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
@@ -100,11 +189,11 @@ struct TvEventDetail: View {
                                 .background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 16))
                                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(RallyTheme.glassBorder, lineWidth: 1))
                         }.buttonStyle(.plain)
-                        ForEach([event.awayTeam, event.homeTeam].compactMap { $0 }, id: \.id) { side in
-                            let team = FavoriteTeam(id: side.id, league: event.league, name: side.name,
+                        ForEach([ev.awayTeam, ev.homeTeam].compactMap { $0 }, id: \.id) { side in
+                            let team = FavoriteTeam(id: side.id, league: ev.league, name: side.name,
                                 abbreviation: side.abbreviation, logoUrl: side.logoUrl)
                             Button { _ = settings.toggleFavoriteTeam(team) } label: {
-                                Text((settings.isFavoriteTeam(id: side.id, league: event.league) ? "Saved: " : "Save ") + side.abbreviation)
+                                Text((settings.isFavoriteTeam(id: side.id, league: ev.league) ? "Saved: " : "Save ") + side.abbreviation)
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(RallyTheme.textPrimary).padding(.horizontal, 24).padding(.vertical, 10)
                                     .background(Color.white.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 16))
@@ -152,31 +241,32 @@ struct TvEventDetail: View {
     // MARK: Panels (mirror EventStatsPanel / EventLeadersPanel / EventAnalyticsPanel chrome)
 
     private var matchupPanel: some View {
-        panel(title: isLive ? "LIVE STATS" : event.status == .notStarted ? "MATCHUP PREVIEW" : "MATCHUP STATS", trailing: nil) {
-            matchupRow(away: event.awayTeam, home: event.homeTeam, label: "TEAMS")
-            matchupRowText(away: recordSummary(event.awayTeam), home: recordSummary(event.homeTeam), label: "RECORD")
+        panel(title: isLive ? "LIVE STATS" : ev.status == .notStarted ? "MATCHUP PREVIEW" : "MATCHUP STATS", trailing: nil) {
+            matchupRow(away: ev.awayTeam, home: ev.homeTeam, label: "TEAMS")
+            matchupRowText(away: recordSummary(ev.awayTeam), home: recordSummary(ev.homeTeam), label: "RECORD")
             ForEach(teamStats.prefix(4), id: \.label) { stat in
                 matchupRowText(away: stat.awayValue, home: stat.homeValue, label: stat.label.uppercased())
             }
-            matchupRowText(away: event.scoreAway.map(String.init), home: event.scoreHome.map(String.init), label: "SCORE")
+            matchupRowText(away: ev.scoreAway.map(String.init), home: ev.scoreHome.map(String.init), label: "SCORE")
         }
     }
 
     private var outlookPanel: some View {
         panel(title: "TEAM OUTLOOK", trailing: nil) {
-            outlookColumn(team: event.awayTeam)
+            outlookColumn(team: ev.awayTeam)
             Divider().opacity(0.3)
-            outlookColumn(team: event.homeTeam)
+            outlookColumn(team: ev.homeTeam)
         }
     }
 
     private var infoPanel: some View {
-        panel(title: event.status == .notStarted ? "GAME INFORMATION" : "ANALYTICS", trailing: nil) {
+        panel(title: ev.status == .notStarted ? "GAME INFORMATION" : "ANALYTICS", trailing: nil) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 metricTile("STATUS", statusText)
-                metricTile("LEAGUE", Artwork.displayLeague(event.league).uppercased())
-                metricTile("VENUE", (event.venue ?? "TBD").uppercased())
-                metricTile("DATE", event.startTime.formatted(.dateTime.month(.abbreviated).day()).uppercased())
+                metricTile("LEAGUE", Artwork.displayLeague(ev.league).uppercased())
+                metricTile("VENUE", (ev.venue ?? "TBD").uppercased())
+                metricTile("DATE", ev.startTime.formatted(.dateTime.month(.abbreviated).day()).uppercased())
+                metricTile("BROADCAST", ev.broadcasts.isEmpty ? "TBD" : ev.broadcasts.joined(separator: " · ").uppercased())
             }
         }
     }
@@ -241,7 +331,7 @@ struct TvEventDetail: View {
             Text(recordSummary(team) ?? "No record available")
                 .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(2)
             if let team {
-                let fav = FavoriteTeam(id: team.id, league: event.league, name: team.name,
+                let fav = FavoriteTeam(id: team.id, league: ev.league, name: team.name,
                                        abbreviation: team.abbreviation, logoUrl: team.logoUrl)
                 Button("TEAM CENTER ›") { store.show(.team(fav)) }
                     .font(.system(size: 10, weight: .bold)).foregroundStyle(RallyTheme.rallyCyan)
@@ -269,7 +359,7 @@ struct TvEventDetail: View {
     }
 
     private var statusText: String {
-        switch event.status {
+        switch ev.status {
         case .live: "LIVE"; case .halftime: "HALFTIME"; case .finished: "FINAL"
         case .notStarted: "UPCOMING"; case .delayed: "DELAYED"; case .canceled: "CANCELED"
         }

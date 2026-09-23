@@ -6,6 +6,7 @@ import SwiftUI
 /// Shares PlayerView's engine slot and video host — no stream restart on switch.
 extension PlayerView {
     var gameViewLayout: some View {
+        ZStack {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 playerButton("‹ Watch") { gameMode = false }
@@ -34,6 +35,25 @@ extension PlayerView {
             } else {
                 highlightsList
             }
+        }
+        if let clip = state.clipOverlay {
+            Color.black.opacity(0.75).ignoresSafeArea()
+                .onTapGesture { state.closeClipOverlay() }
+            VStack(spacing: 12) {
+                HStack {
+                    Text(clip.title).font(.system(size: 16, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                    Spacer()
+                    playerButton("Close clip") { state.closeClipOverlay() }
+                }
+                VideoHost(host: state.clipHost)
+                    .frame(minWidth: 640, minHeight: 360)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text("Live game keeps playing underneath.")
+                    .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+            }
+            .padding(28)
+        }
         }
         .background(RallyTheme.background)
     }
@@ -90,12 +110,39 @@ extension PlayerView {
                 matchupLine(team: event.homeTeam, score: event.scoreHome)
                 Divider().opacity(0.25)
             }
+            if let home = state.homeWinPct, let away = state.awayWinPct {
+                Text("WIN PROBABILITY").font(.system(size: 10, weight: .bold)).tracking(1)
+                    .foregroundStyle(RallyTheme.textSecondary)
+                winProbBar(home: home, away: away)
+                Divider().opacity(0.25)
+            }
             if let p = state.primary {
                 diagRow("Stream", specsLine(p))
                 let h = store.settings.streamHealth(target: p.url)
                 diagRow("Source health", "\(healthLabel(h.score)) · \(h.score)")
             }
             diagRow("Status", event.map(statusText) ?? channel?.name ?? "Live")
+        }
+    }
+
+    private func winProbBar(home: Double, away: Double) -> some View {
+        VStack(spacing: 4) {
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    Rectangle().fill(RallyTheme.rallyCyan)
+                        .frame(width: geo.size.width * CGFloat(away / max(1, home + away)))
+                    Rectangle().fill(Color.white.opacity(0.25))
+                        .frame(width: geo.size.width * CGFloat(home / max(1, home + away)))
+                }
+            }
+            .frame(height: 8)
+            .clipShape(Capsule())
+            HStack {
+                Text("\(event?.awayTeam?.abbreviation ?? "AWY") \(Int(away))%")
+                Spacer()
+                Text("\(Int(home))% \(event?.homeTeam?.abbreviation ?? "HME")")
+            }
+            .font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
         }
     }
 
@@ -253,7 +300,7 @@ extension PlayerView {
                 }
                 ForEach(state.clips) { clip in
                     Button {
-                        Task { await state.playClip(clip, store: store, drawable: host) }
+                        state.openClipOverlay(clip)
                     } label: {
                         HStack(spacing: 12) {
                             if let thumb = clip.thumbnailUrl, let link = URL(string: thumb) {

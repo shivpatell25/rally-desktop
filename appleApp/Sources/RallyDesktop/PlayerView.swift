@@ -38,6 +38,8 @@ final class PlayerState: ObservableObject {
     @Published var clips: [HighlightClip] = []
     @Published var tables: [PlayerStatTable] = []
     @Published var teamStats: [TeamStatComparison] = []
+    @Published var homeWinPct: Double?
+    @Published var awayWinPct: Double?
     @Published var detailLoading = false
     @Published var positionText = "0:00:00"
     @Published var positionFraction: Double = 0
@@ -46,6 +48,12 @@ final class PlayerState: ObservableObject {
     @Published var stallCount = 0
     @Published var adaptiveReason: String?
     @Published var profileName = "Standard"
+    /// Dedicated clip player: highlights play on their own engine slot so the
+    /// live session underneath is never torn down (Android CurrentHighlightsChrome).
+    @Published var clipOverlay: HighlightClip?
+    let clipEngine = VlcEngine()
+    let clipHost = NSView()
+    private let clipSlotId = UUID().uuidString
     let engine = VlcEngine()
     private let slotId = UUID().uuidString
     private var startedAt = Date()
@@ -96,6 +104,8 @@ final class PlayerState: ObservableObject {
                 clips = detail.clips
                 tables = detail.playerTables
                 teamStats = detail.teamStats
+                homeWinPct = detail.homeWinPct
+                awayWinPct = detail.awayWinPct
                 detailLoading = false
                 log("detail leaders=\(detail.leaders.count) clips=\(detail.clips.count)")
             }
@@ -147,6 +157,29 @@ final class PlayerState: ObservableObject {
         _ = await attempt(PlayCandidate(title: clip.title, url: url, kind: .stremio,
                                         exactMatch: true, rank: 0, addonName: "ESPN"),
                           store: store, drawable: drawable)
+    }
+
+    /// Opens a highlight in the overlay player; the live slot keeps playing.
+    func openClipOverlay(_ clip: HighlightClip) {
+        guard let urlString = clip.streamUrl, let url = URL(string: urlString), url.host != nil else {
+            candidateNote[clip.id] = "Highlight has no playable stream"
+            return
+        }
+        _ = clipEngine.reserve(slotId: clipSlotId)
+        do {
+            clipEngine.stop(slotId: clipSlotId)
+            try clipEngine.play(slotId: clipSlotId, title: clip.title, url: url, drawable: clipHost)
+            clipOverlay = clip
+            log("clip overlay playing \(clip.title)")
+        } catch {
+            candidateNote[clip.id] = "Clip failed: \(error.localizedDescription)"
+            log("clip overlay failed: \(error.localizedDescription)")
+        }
+    }
+
+    func closeClipOverlay() {
+        clipEngine.stop(slotId: clipSlotId)
+        clipOverlay = nil
     }
 
     /// Restart replays the current source from scratch.
@@ -300,6 +333,15 @@ final class PlayerState: ObservableObject {
         log(paused ? "paused" : "resumed")
     }
 
+    func teardown() {
+        engine.release(slotId: slotId)
+        clipEngine.stop(slotId: clipSlotId)
+        clipEngine.release(slotId: clipSlotId)
+        clipOverlay = nil
+        isPlaying = false
+        paused = false
+    }
+
     func toggleMute() {
         engine.setMuted(slotId: slotId, muted: !muted)
         muted = engine.isMuted(slotId: slotId)
@@ -312,12 +354,6 @@ final class PlayerState: ObservableObject {
             positionText = pos.clock
         }
         paused = !engine.isPlaying(slotId: slotId) && isPlaying
-    }
-
-    func teardown() {
-        engine.release(slotId: slotId)
-        isPlaying = false
-        paused = false
     }
 }
 
@@ -705,73 +741,180 @@ struct PlayerView: View {
 
 @MainActor
 final class MultiViewState: ObservableObject {
+    enum LayoutMode: String, CaseIterable { case grid, focus, single }
     struct Tile: Identifiable {
         var id = UUID().uuidString
         var title: String
         var candidate: PlayCandidate
+        var audioOn = false
+        var status: Status = .loading
+        var note: String?
+        enum Status: Equatable { case loading, playing, failed }
     }
     @Published var tiles: [Tile] = []
+    @Published var layout: LayoutMode = .grid
+    @Published var soloId: String?
     let engine = VlcEngine()
 
     /// Tile cap follows the device profile (constrained hardware: 2 tiles).
     var canAdd: Bool { tiles.count < PlaybackProfile.resolve().maxTiles }
+    var maxTiles: Int { PlaybackProfile.resolve().maxTiles }
 
     func add(candidate: PlayCandidate) {
         guard canAdd, engine.reserve(slotId: candidate.id) else { return }
-        tiles.append(Tile(title: candidate.title, candidate: candidate))
+        var tile = Tile(title: candidate.title, candidate: candidate)
+        tile.audioOn = tiles.allSatisfy { !$0.audioOn }
+        tiles.append(tile)
+        applyAudioFocus()
     }
 
     func remove(_ tile: Tile) {
         tiles.removeAll { $0.id == tile.id }
         engine.release(slotId: tile.candidate.id)
+        if soloId == tile.id { soloId = nil }
+        if tile.audioOn, let first = tiles.first {
+            setAudio(tileId: first.id, on: true)
+        }
     }
 
-    func play(tile: Tile, drawable: NSView) {
-        guard let url = URL(string: tile.candidate.url) else { return }
-        try? engine.play(slotId: tile.candidate.id, title: tile.title, url: url,
-                         headers: tile.candidate.headers, drawable: drawable)
+    /// Single-audio-focus: exactly one tile audible (Android single-audio).
+    func setAudio(tileId: String, on: Bool) {
+        for i in tiles.indices {
+            tiles[i].audioOn = tiles[i].id == tileId ? on : false
+        }
+        applyAudioFocus()
+    }
+
+    private func applyAudioFocus() {
+        for tile in tiles {
+            engine.setMuted(slotId: tile.candidate.id, muted: !tile.audioOn)
+        }
+    }
+
+    func play(tile: Tile, tuning: PlaybackTuning, drawable: NSView) {
+        guard let url = URL(string: tile.candidate.url) else {
+            setStatus(id: tile.id, status: .failed, note: "Bad stream URL")
+            return
+        }
+        setStatus(id: tile.id, status: .loading, note: nil)
+        do {
+            let safeHeaders = StreamRequestHeaders.sanitized(tile.candidate.headers)
+            try engine.play(slotId: tile.candidate.id, title: tile.title, url: url,
+                            headers: safeHeaders.isEmpty ? nil : safeHeaders,
+                            tuning: tuning, drawable: drawable)
+            setStatus(id: tile.id, status: .playing, note: nil)
+            applyAudioFocus()
+        } catch {
+            setStatus(id: tile.id, status: .failed, note: "Failed: \(error.localizedDescription)")
+        }
+    }
+
+    func retry(tile: Tile, tuning: PlaybackTuning, drawable: NSView) {
+        play(tile: tile, tuning: tuning, drawable: drawable)
+    }
+
+    private func setStatus(id: String, status: Tile.Status, note: String?) {
+        guard let i = tiles.firstIndex(where: { $0.id == id }) else { return }
+        tiles[i].status = status
+        tiles[i].note = note
     }
 
     func teardown() {
         engine.releaseAll()
         tiles.removeAll()
+        soloId = nil
+        layout = .grid
     }
 }
 
 struct MultiViewView: View {
     @EnvironmentObject var store: RallyStore
     @ObservedObject var state: MultiViewState
+    @State private var reloadTick = 0
+    private func tuning() -> PlaybackTuning {
+        let profile = PlaybackProfile.resolve(lowLatency: store.settings.lowLatencyMode)
+        return PlaybackTuning(lowLatency: store.settings.lowLatencyMode,
+                              audioNormalization: store.settings.audioNormalizationEnabled,
+                              networkCachingMs: profile.networkCachingMs)
+    }
+    private var visibleTiles: [MultiViewState.Tile] {
+        if state.layout == .single, let id = state.soloId {
+            return state.tiles.filter { $0.id == id }
+        }
+        return state.tiles
+    }
     var body: some View {
-        VStack {
+        VStack(spacing: 8) {
             if state.tiles.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "rectangle.split.2x2").font(.largeTitle)
                     Text("Multi-View").font(.headline)
-                    Text("Open an event and add its sources as tiles (max 4).")
+                    Text("Open an event and add its sources as tiles (max \(state.maxTiles)).")
                         .font(.caption).foregroundStyle(RallyTheme.textTertiary)
                 }
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: state.tiles.count > 1 ? 2 : 1), spacing: 8) {
-                    ForEach(state.tiles) { tile in
-                        VStack(spacing: 4) {
-                            VLCVideoView { view in state.play(tile: tile, drawable: view) }
-                                .frame(minHeight: 200)
-                                .background(Color.black)
-                                .clipShape(RoundedRectangle(cornerRadius: RallyTheme.cardCorner))
-                            HStack {
-                                Text(tile.title).font(.caption).lineLimit(1)
-                                Spacer()
-                                Button("Remove") { state.remove(tile) }
-                                    .font(.caption)
-                            }
-                        }
+                HStack(spacing: 8) {
+                    Text("Multi-View (\(state.tiles.count)/\(state.maxTiles))").font(.headline)
+                    Spacer()
+                    Picker("Layout", selection: $state.layout) {
+                        Text("Grid").tag(MultiViewState.LayoutMode.grid)
+                        Text("Focus").tag(MultiViewState.LayoutMode.focus)
+                        Text("Single").tag(MultiViewState.LayoutMode.single)
+                    }
+                    .frame(maxWidth: 220)
+                    .onChange(of: state.layout) { _ in
+                        if state.layout != .single { state.soloId = nil }
+                        else if state.soloId == nil { state.soloId = state.tiles.first?.id }
                     }
                 }
-                .padding(8)
+                .padding(.horizontal, 8)
+                if state.layout == .focus, let first = state.tiles.first {
+                    tileCard(first, large: true)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
+                        ForEach(state.tiles.dropFirst()) { tile in tileCard(tile, large: false) }
+                    }
+                    .padding(.horizontal, 8)
+                } else {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                            count: visibleTiles.count > 1 && state.layout == .grid ? 2 : 1), spacing: 8) {
+                        ForEach(visibleTiles) { tile in tileCard(tile, large: state.layout != .grid) }
+                    }
+                    .padding(8)
+                }
             }
         }
         .background(RallyTheme.background)
-        .navigationTitle("Multi-View (\(state.tiles.count)/4)")
+        .navigationTitle("Multi-View")
         .onDisappear { state.teardown() }
+    }
+
+    private func tileCard(_ tile: MultiViewState.Tile, large: Bool) -> some View {
+        VStack(spacing: 4) {
+            VLCVideoView { [tile] view in state.play(tile: tile, tuning: tuning(), drawable: view) }
+                .frame(minHeight: large ? 320 : 200)
+                .background(Color.black)
+                .clipShape(RoundedRectangle(cornerRadius: RallyTheme.cardCorner))
+                .id("\(tile.id)-\(reloadTick)")
+            HStack(spacing: 8) {
+                Button { state.setAudio(tileId: tile.id, on: !tile.audioOn) } label: {
+                    Text(tile.audioOn ? "🔊" : "🔇").font(.caption)
+                }.buttonStyle(.plain)
+                Text(tile.title).font(.caption).lineLimit(1)
+                if tile.status == .failed, let note = tile.note {
+                    Text(note).font(.caption2).foregroundStyle(RallyTheme.liveRed).lineLimit(1)
+                }
+                Spacer()
+                if tile.status == .failed {
+                    Button("Retry") {
+                        reloadTick += 1
+                    }.font(.caption).buttonStyle(.plain)
+                }
+                Button(state.soloId == tile.id ? "Unfocus" : "Solo") {
+                    if state.soloId == tile.id { state.soloId = nil; state.layout = .grid }
+                    else { state.soloId = tile.id; state.layout = .single }
+                }.font(.caption).buttonStyle(.plain)
+                Button("Remove") { state.remove(tile) }.font(.caption)
+            }
+        }
     }
 }

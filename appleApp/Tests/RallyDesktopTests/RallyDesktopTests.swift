@@ -226,6 +226,35 @@ final class RallyDesktopTests: XCTestCase {
         XCTAssertEqual(detail.clips[0].streamUrl, "http://x/h.m3u8")
         XCTAssertEqual(detail.clips[0].durationSeconds, 42)
     }
+
+    func testPredictorMapping() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.result = nil
+        // Flat percentage strings.
+        StubURLProtocol.body = """
+            {"predictor": {"homeWinPercentage": "62.5", "awayWinPercentage": "37.5"}}
+            """.data(using: .utf8)
+        let flat = await EspnClient(session: URLSession(configuration: config))
+            .fetchSummary(sport: "football", league: "nfl", eventId: "e1")
+        XCTAssertEqual(flat.homeWinPct ?? -1, 62.5, accuracy: 0.01)
+        XCTAssertEqual(flat.awayWinPct ?? -1, 37.5, accuracy: 0.01)
+        // Nested side objects with fractional numbers.
+        StubURLProtocol.body = """
+            {"predictor": {"homeTeam": {"chanceToWin": 0.7}, "awayTeam": {"chanceToWin": 0.3}}}
+            """.data(using: .utf8)
+        let nested = await EspnClient(session: URLSession(configuration: config))
+            .fetchSummary(sport: "football", league: "nfl", eventId: "e1")
+        XCTAssertEqual(nested.homeWinPct ?? -1, 70, accuracy: 0.01)
+        XCTAssertEqual(nested.awayWinPct ?? -1, 30, accuracy: 0.01)
+        // Absent predictor: nothing rendered.
+        StubURLProtocol.body = "{}".data(using: .utf8)
+        let none = await EspnClient(session: URLSession(configuration: config))
+            .fetchSummary(sport: "football", league: "nfl", eventId: "e1")
+        XCTAssertNil(none.homeWinPct)
+        XCTAssertNil(none.awayWinPct)
+        StubURLProtocol.body = nil
+    }
 }
 
 final class StubURLProtocol: URLProtocol {

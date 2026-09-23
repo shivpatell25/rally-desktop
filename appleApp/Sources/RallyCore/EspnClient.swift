@@ -53,6 +53,46 @@ private struct EspnSummaryResponse: Decodable {
     var leaders: [EspnLeaderGroup]?
     var videos: [EspnVideo]?
     var boxscore: EspnBoxscore?
+    var predictor: EspnPredictor?
+}
+private struct EspnPredictor: Decodable {
+    var homeWinPercentage: EspnPct?
+    var awayWinPercentage: EspnPct?
+    var homeWinProbability: EspnPct?
+    var awayWinProbability: EspnPct?
+    var homeTeam: EspnPredictorSide?
+    var awayTeam: EspnPredictorSide?
+    var home: EspnPredictorSide?
+    var away: EspnPredictorSide?
+}
+private struct EspnPredictorSide: Decodable {
+    var winPercent: EspnPct?
+    var winPercentage: EspnPct?
+    var chanceToWin: EspnPct?
+    var winProbability: EspnPct?
+}
+private enum EspnPct: Decodable {
+    case number(Double)
+    case text(String)
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let d = try? c.decode(Double.self) { self = .number(d) }
+        else { self = .text((try? c.decode(String.self)) ?? "") }
+    }
+    /// Normalized 0-100, nil when unparseable. Fractions (<1) scale up.
+    var value: Double? {
+        let raw: Double
+        switch self {
+        case .number(let d): raw = d
+        case .text(let s):
+            let clean = s.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "%", with: "")
+            guard let d = Double(clean) else { return nil }
+            raw = d
+        }
+        guard raw.isFinite else { return nil }
+        let pct = (raw > 0 && raw < 1) ? raw * 100 : raw
+        return (0...100).contains(pct) ? pct : nil
+    }
 }
 private struct EspnLeaderGroup: Decodable {
     var team: EspnTeam?
@@ -222,6 +262,9 @@ public final class EspnClient: Sendable {
         public var clips: [HighlightClip]
         public var playerTables: [PlayerStatTable]
         public var teamStats: [TeamStatComparison]
+        /// ESPN matchup predictor, when published (0-100). Rendered only if present.
+        public var homeWinPct: Double?
+        public var awayWinPct: Double?
     }
 
     /// Per-game summary: leaders + highlight videos. Mirrors the
@@ -308,7 +351,25 @@ public final class EspnClient: Sendable {
             }
             return out
         }()
-        return GameDetail(leaders: leaders, clips: clips, playerTables: playerTables, teamStats: teamStats)
+        let predictor = summary.predictor
+        let homeWinPct = predictor?.homeWinPercentage?.value
+            ?? predictor?.homeWinProbability?.value
+            ?? predictor?.homeTeam?.winPercent?.value
+            ?? predictor?.homeTeam?.winPercentage?.value
+            ?? predictor?.homeTeam?.chanceToWin?.value
+            ?? predictor?.homeTeam?.winProbability?.value
+            ?? predictor?.home?.winPercent?.value
+            ?? predictor?.home?.chanceToWin?.value
+        let awayWinPct = predictor?.awayWinPercentage?.value
+            ?? predictor?.awayWinProbability?.value
+            ?? predictor?.awayTeam?.winPercent?.value
+            ?? predictor?.awayTeam?.winPercentage?.value
+            ?? predictor?.awayTeam?.chanceToWin?.value
+            ?? predictor?.awayTeam?.winProbability?.value
+            ?? predictor?.away?.winPercent?.value
+            ?? predictor?.away?.chanceToWin?.value
+        return GameDetail(leaders: leaders, clips: clips, playerTables: playerTables, teamStats: teamStats,
+                          homeWinPct: homeWinPct, awayWinPct: awayWinPct)
     }
     public static func path(forLeague domainLeague: String) -> (sport: String, path: String)? {
         leagues.first(where: { $0.league == domainLeague }).map { ($0.sport, $0.path) }
