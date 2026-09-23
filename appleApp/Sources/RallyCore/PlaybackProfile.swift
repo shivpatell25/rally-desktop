@@ -57,6 +57,18 @@ public struct PlaybackTuning: Sendable, Equatable {
         return out
     }
 }
+/// Engine route: header-gated HLS goes to AVPlayer (full header fields),
+/// everything else to libVLC (odd transports and codecs).
+public enum PlaybackRoute {
+    public static func usesAVPlayer(headers: [String: String], url: URL) -> Bool {
+        let needsHeaders = headers.keys.contains {
+            $0.lowercased() == "cookie" || $0.lowercased() == "authorization"
+        }
+        let isHls = url.pathExtension.lowercased() == "m3u8"
+            || url.absoluteString.lowercased().contains(".m3u8")
+        return needsHeaders && isHls
+    }
+}
 
 /// Adaptive fallback policy: after repeated stalls, step down to the next
 /// ranked candidate once and say why (Android adaptive tier loop + reason).

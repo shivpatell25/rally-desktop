@@ -343,7 +343,7 @@ extension PlayerView {
 
     private var videoCard: some View {
         ZStack {
-            VideoHost(host: host)
+            VideoHost(host: state.avActive ? state.avHost : host)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(Color.black)
             if controlsVisible {

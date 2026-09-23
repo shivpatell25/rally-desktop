@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 
@@ -10,6 +11,7 @@ public final class PlaybackController: ObservableObject {
     @Published public private(set) var isPlaying = false
     @Published public private(set) var error: String?
     public let player = AVPlayer()
+    private var layer: AVPlayerLayer?
 
     public init() {}
 
@@ -25,6 +27,37 @@ public final class PlaybackController: ObservableObject {
         player.replaceCurrentItem(with: item)
         player.play()
         isPlaying = true
+    }
+
+    /// Hosts video in a plain NSView (the VLC drawable stays untouched, so
+    /// switching engines never fights over one layer).
+    public func attach(to view: NSView) {
+        view.wantsLayer = true
+        if layer?.superlayer !== view.layer {
+            layer?.removeFromSuperlayer()
+            let fresh = AVPlayerLayer(player: player)
+            fresh.frame = view.bounds
+            fresh.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+            view.layer?.addSublayer(fresh)
+            layer = fresh
+        }
+    }
+
+    public func pause() {
+        player.pause()
+        isPlaying = false
+    }
+
+    public func resume() {
+        player.play()
+        isPlaying = true
+    }
+
+    public func position() -> (fraction: Double, clock: String)? {
+        guard let item = player.currentItem, item.duration.seconds.isFinite, item.duration.seconds > 0 else { return nil }
+        let pos = player.currentTime().seconds
+        let s = max(0, Int(pos))
+        return (pos / item.duration.seconds, String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60))
     }
 
     public func stop() {

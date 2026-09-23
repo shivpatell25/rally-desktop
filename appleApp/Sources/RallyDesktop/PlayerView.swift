@@ -54,6 +54,11 @@ final class PlayerState: ObservableObject {
     let clipEngine = VlcEngine()
     let clipHost = NSView()
     private let clipSlotId = UUID().uuidString
+    /// AVPlayer route for header-gated HLS (Cookie/Authorization libVLC
+    /// cannot inject). Own host view; the VLC drawable is never shared.
+    let avController = PlaybackController()
+    let avHost = NSView()
+    @Published var avActive = false
     let engine = VlcEngine()
     private let slotId = UUID().uuidString
     private var startedAt = Date()
@@ -265,9 +270,26 @@ final class PlayerState: ObservableObject {
         }
         log("try kind=\(candidate.kind) host=\(host) exact=\(candidate.exactMatch)")
         startedAt = Date()
+        let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers ?? channelHeaders(store, candidate))
+        let isHlsRoute = PlaybackRoute.usesAVPlayer(headers: safeHeaders, url: url)
+        if isHlsRoute {
+            // libVLC cannot inject Cookie/Authorization — AVPlayer sends the
+            // full header fields (Android ExoPlayer parity for authed HLS).
+            avController.attach(to: avHost)
+            avController.play(url: url, headers: safeHeaders)
+            avActive = true
+            primary = candidate
+            isPlaying = true
+            stallCount = 0
+            candidateNote[candidate.id] = "Playing (AVPlayer)"
+            let ms = Int64(Date().timeIntervalSince(startedAt) * 1000)
+            store.settings.recordStreamSuccess(target: candidate.url, startupMs: ms)
+            log("playing via AVPlayer startupMs=\(ms)")
+            return true
+        }
+        avActive = false
         do {
             _ = engine.reserve(slotId: slotId)
-            let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers ?? channelHeaders(store, candidate))
             let (_, tuning) = tuning(for: store)
             try engine.play(slotId: slotId, title: candidate.title, url: url,
                             headers: safeHeaders.isEmpty ? nil : safeHeaders,
@@ -295,7 +317,8 @@ final class PlayerState: ObservableObject {
     /// down once with a reason instead of spinning forever.
     func watchdog(store: RallyStore, drawable: NSView) async {
         guard isPlaying, !paused else { return }
-        guard !engine.isPlaying(slotId: slotId) else { stallCount = 0; return }
+        let active = avActive ? avController.isPlaying : engine.isPlaying(slotId: slotId)
+        guard !active else { stallCount = 0; return }
         stallCount += 1
         if let p = primary { store.settings.recordStreamStall(target: p.url) }
         log("stall #\(stallCount)")
@@ -323,7 +346,10 @@ final class PlayerState: ObservableObject {
     }
 
     func togglePause() {
-        if paused {
+        if avActive {
+            if paused { avController.resume() } else { avController.pause() }
+            paused = !paused
+        } else if paused {
             engine.resume(slotId: slotId)
             paused = false
         } else {
@@ -335,6 +361,8 @@ final class PlayerState: ObservableObject {
 
     func teardown() {
         engine.release(slotId: slotId)
+        avController.stop()
+        avActive = false
         clipEngine.stop(slotId: clipSlotId)
         clipEngine.release(slotId: clipSlotId)
         clipOverlay = nil
@@ -343,12 +371,25 @@ final class PlayerState: ObservableObject {
     }
 
     func toggleMute() {
-        engine.setMuted(slotId: slotId, muted: !muted)
-        muted = engine.isMuted(slotId: slotId)
+        if avActive {
+            avController.player.isMuted = !avController.player.isMuted
+            muted = avController.player.isMuted
+        } else {
+            engine.setMuted(slotId: slotId, muted: !muted)
+            muted = engine.isMuted(slotId: slotId)
+        }
         log(muted ? "muted" : "unmuted")
     }
 
     func refreshStats() {
+        if avActive {
+            if let pos = avController.position() {
+                positionFraction = pos.fraction
+                positionText = pos.clock
+            }
+            paused = !avController.isPlaying && isPlaying
+            return
+        }
         if let pos = engine.position(slotId: slotId) {
             positionFraction = pos.fraction
             positionText = pos.clock
@@ -417,8 +458,7 @@ struct PlayerView: View {
 
     private var watchLayout: some View {
         ZStack {
-            VideoHost(host: host)
-            .background(Color.black)
+            VideoHost(host: state.avActive ? state.avHost : host)
             // Top + bottom scrims (mirrors PlaybackHud gradients).
             if controlsVisible || pickerVisible || diagVisible {
                 VStack {
