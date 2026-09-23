@@ -54,6 +54,12 @@ public final class VlcEngine: @unchecked Sendable {
     /// slotId past the cap, `.unreservedSlot` when the slot was released.
     @MainActor
     public func play(slotId: String, title: String, url: URL, headers: [String: String]? = nil, drawable: NSView? = nil) throws {
+        try play(slotId: slotId, title: title, url: url, headers: headers, tuning: nil, drawable: drawable)
+    }
+
+    @MainActor
+    public func play(slotId: String, title: String, url: URL, headers: [String: String]? = nil,
+                     tuning: PlaybackTuning? = nil, drawable: NSView? = nil) throws {
         let known: Bool = lock.withLock { reserved.contains(slotId) }
         guard known else { throw Error.unreservedSlot }
         if lock.withLock({ players[slotId] == nil }) && tileCount > Self.maxTiles {
@@ -67,6 +73,9 @@ public final class VlcEngine: @unchecked Sendable {
         }
         guard let media = VLCMedia(url: url) else { throw Error.mediaInitFailed }
         for (key, value) in vlcOptions(from: headers) { media.addOptions([key: value]) }
+        if let tuning {
+            for (key, value) in tuning.mediaOptions { media.addOptions([key: value]) }
+        }
         player.media = media
         if let drawable { player.drawable = drawable }
         player.play()

@@ -42,9 +42,15 @@ final class PlayerState: ObservableObject {
     @Published var positionText = "0:00:00"
     @Published var positionFraction: Double = 0
     @Published var showDiagnostics = false
+    @Published var recoveryAttempts = 0
+    @Published var stallCount = 0
+    @Published var adaptiveReason: String?
+    @Published var profileName = "Standard"
     let engine = VlcEngine()
     private let slotId = UUID().uuidString
     private var startedAt = Date()
+    /// Candidates that already failed this session (Android blacklist).
+    private var failedTargets: Set<String> = []
 
     private func log(_ line: String) {
         let stamped = "[Player] \(line)"
@@ -57,7 +63,10 @@ final class PlayerState: ObservableObject {
         isLoading = true
         error = nil
         candidateNote = [:]
-        defer { isLoading = false }
+        failedTargets.removeAll()
+        recoveryAttempts = 0
+        stallCount = 0
+        adaptiveReason = nil
         var cands: [PlayCandidate] = []
         if let event {
             let addons = store.settings.stremioAddonUrls
@@ -122,9 +131,10 @@ final class PlayerState: ObservableObject {
         }
         candidates = StreamResolver.sort(candidates) { settings.streamHealth(target: $0).score }
     }
-
+    /// Explicit single attempt (user-picked source): no auto-walk.
     func switchTo(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
-        await play(candidate, store: store, drawable: drawable)
+        error = nil
+        _ = await attempt(candidate, store: store, drawable: drawable)
     }
 
     /// Plays an ESPN highlight clip as a one-off Stremio-kind candidate.
@@ -133,9 +143,10 @@ final class PlayerState: ObservableObject {
             error = "Highlight has no playable stream"
             return
         }
-        await play(PlayCandidate(title: clip.title, url: url, kind: .stremio,
-                                 exactMatch: true, rank: 0, addonName: "ESPN"),
-                   store: store, drawable: drawable)
+        error = nil
+        _ = await attempt(PlayCandidate(title: clip.title, url: url, kind: .stremio,
+                                        exactMatch: true, rank: 0, addonName: "ESPN"),
+                          store: store, drawable: drawable)
     }
 
     /// Restart replays the current source from scratch.
@@ -163,7 +174,38 @@ final class PlayerState: ObservableObject {
         log("retry done playing=\(isPlaying)")
     }
 
+    /// Autoplay entry with bounded auto-recovery (Android
+    /// `recoverFromPlaybackFailure`): blacklist failures, try at most 3
+    /// candidates, terminal error only after exhausting them.
     private func play(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
+        error = nil
+        recoveryAttempts = 0
+        var next: PlayCandidate? = candidate
+        var attempts = 0
+        while let cand = next, attempts < 3 {
+            attempts += 1
+            if await attempt(cand, store: store, drawable: drawable) { return }
+            recoveryAttempts += 1
+            next = StreamResolver.sort(candidates.filter {
+                !failedTargets.contains($0.id) && $0.id != cand.id
+            }) { store.settings.streamHealth(target: $0).score }.first
+        }
+        if !isPlaying, error == nil { error = "All sources failed" }
+        log("autoplay done playing=\(isPlaying) attempts=\(attempts)")
+    }
+
+    private func tuning(for store: RallyStore) -> (profile: PlaybackProfile, tuning: PlaybackTuning) {
+        let profile = PlaybackProfile.resolve(lowLatency: store.settings.lowLatencyMode)
+        profileName = profile.name
+        let tuning = PlaybackTuning(lowLatency: store.settings.lowLatencyMode,
+                                    audioNormalization: store.settings.audioNormalizationEnabled,
+                                    networkCachingMs: profile.networkCachingMs)
+        return (profile, tuning)
+    }
+
+    /// Single engine attempt. Returns false on failure (blacklisted); the
+    /// caller decides whether to walk on.
+    private func attempt(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async -> Bool {
         error = nil
         candidateNote[candidate.id] = "Resolving…"
         var urlString = candidate.url
@@ -184,27 +226,53 @@ final class PlayerState: ObservableObject {
             candidateNote[candidate.id] = "Bad stream URL"
             error = "Bad stream URL"
             store.settings.recordStreamFailure(target: candidate.url)
+            failedTargets.insert(candidate.id)
             log("bad url kind=\(candidate.kind)")
-            return
+            return false
         }
         log("try kind=\(candidate.kind) host=\(host) exact=\(candidate.exactMatch)")
         startedAt = Date()
         do {
             _ = engine.reserve(slotId: slotId)
             let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers ?? channelHeaders(store, candidate))
+            let (_, tuning) = tuning(for: store)
             try engine.play(slotId: slotId, title: candidate.title, url: url,
-                            headers: safeHeaders.isEmpty ? nil : safeHeaders, drawable: drawable)
+                            headers: safeHeaders.isEmpty ? nil : safeHeaders,
+                            tuning: tuning, drawable: drawable)
             primary = candidate
             isPlaying = true
+            stallCount = 0
             candidateNote[candidate.id] = "Playing"
             let ms = Int64(Date().timeIntervalSince(startedAt) * 1000)
             store.settings.recordStreamSuccess(target: candidate.url, startupMs: ms)
-            log("playing startupMs=\(ms)")
+            log("playing startupMs=\(ms) profile=\(profileName) norm=\(store.settings.audioNormalizationEnabled)")
+            return true
         } catch {
             candidateNote[candidate.id] = "Failed: \(error.localizedDescription)"
             self.error = "Playback failed: \(error.localizedDescription)"
             store.settings.recordStreamFailure(target: candidate.url)
+            failedTargets.insert(candidate.id)
             log("failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Stall watchdog (1s timer): an engine that stopped on its own while
+    /// playing counts a stall; with adaptive quality on, repeated stalls step
+    /// down once with a reason instead of spinning forever.
+    func watchdog(store: RallyStore, drawable: NSView) async {
+        guard isPlaying, !paused else { return }
+        guard !engine.isPlaying(slotId: slotId) else { stallCount = 0; return }
+        stallCount += 1
+        if let p = primary { store.settings.recordStreamStall(target: p.url) }
+        log("stall #\(stallCount)")
+        guard store.settings.adaptiveQualityEnabled, let p = primary else { return }
+        if let (next, reason) = AdaptivePolicy.fallback(afterStalls: stallCount, candidates: candidates,
+                                                        currentId: p.id, failedIds: failedTargets) {
+            adaptiveReason = reason
+            stallCount = 0
+            log(reason)
+            await play(next, store: store, drawable: drawable)
         }
     }
 
@@ -284,6 +352,7 @@ struct PlayerView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 state.refreshStats()
+                await state.watchdog(store: store, drawable: host)
             }
         }
         .onAppear {
@@ -593,6 +662,17 @@ struct PlayerView: View {
                     diagRow("Specs", specsLine(p))
                     let h = store.settings.streamHealth(target: p.url)
                     diagRow("Health", "\(healthLabel(h.score)) · \(h.score)")
+                    diagRow("Profile", "\(state.profileName) · \(store.settings.lowLatencyMode ? "low-latency" : "standard latency")")
+                    diagRow("Recovery", "\(state.recoveryAttempts) retries · \(state.stallCount) stalls")
+                    if let reason = state.adaptiveReason {
+                        diagRow("Adaptive", reason)
+                    }
+                    if let evidence = p.matchEvidence, !evidence.isEmpty {
+                        diagRow("Match", evidence)
+                    }
+                    if p.preflightPassed == true, let ms = p.preflightLatencyMs {
+                        diagRow("Verified", "\(ms) ms before playback")
+                    }
                 }
                 Divider().opacity(0.3)
                 ForEach(state.trace.suffix(8), id: \.self) { line in
@@ -633,7 +713,8 @@ final class MultiViewState: ObservableObject {
     @Published var tiles: [Tile] = []
     let engine = VlcEngine()
 
-    var canAdd: Bool { tiles.count < VlcEngine.maxTiles }
+    /// Tile cap follows the device profile (constrained hardware: 2 tiles).
+    var canAdd: Bool { tiles.count < PlaybackProfile.resolve().maxTiles }
 
     func add(candidate: PlayCandidate) {
         guard canAdd, engine.reserve(slotId: candidate.id) else { return }
