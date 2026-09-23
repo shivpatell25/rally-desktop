@@ -93,7 +93,8 @@ public enum GameAlerts {
 }
 
 /// Delivery: dedupe + UNUserNotificationCenter posting with deep-link payload.
-public final class GameAlertCenter: NSObject, Sendable, UNUserNotificationCenterDelegate {
+/// Unchecked Sendable: all mutable state sits behind `lock` (VlcEngine pattern).
+public final class GameAlertCenter: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate {
     public static let openEventNotification = Notification.Name("RallyOpenEvent")
     private var delivered: Set<String> = []
     private let lock = NSLock()

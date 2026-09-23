@@ -38,7 +38,7 @@ swift test           # unit suite (quality, matcher, providers, updates, summary
 swift run SelfTest   # dependency-free assert pass
 ```
 
-Debug deep links for verification: `--tv=leagues|live|highlights|myteams`, `--league=NFL`, `--event=<id|first>`, `--play=<id|first>`, `--game`, `--settings`.
+Debug deep links for verification: `--tv=leagues|live|highlights|myteams`, `--league=NFL`, `--event=<id|first>`, `--play=<id|first>`, `--team=<league:id>`, `--game`, `--settings`, `--skip-onboarding`. Notifications and browsers can also open `rally://event/<id>` and `rally://team/<league:id>`.
 
 Unsigned dev package (signed/notarized DMG needs a Team ID):
 

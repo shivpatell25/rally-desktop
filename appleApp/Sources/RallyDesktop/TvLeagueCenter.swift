@@ -32,6 +32,14 @@ struct TvLeagueCenter: View {
     }
     private var showPlayoffs: Bool { !postseasonGames.isEmpty || !playoffSeeds.isEmpty }
 
+    /// League-matching provider channels for the CHANNELS strip.
+    private var leagueChannels: [IptvChannel] {
+        let q = league.lowercased()
+        return store.channels.filter {
+            $0.name.lowercased().contains(q) || $0.category.lowercased().contains(q)
+        }.prefix(8).map { $0 }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
@@ -86,6 +94,36 @@ struct TvLeagueCenter: View {
                     } else {
                         portraitGrid(leagueEvents)
                     }
+                    if !leagueChannels.isEmpty {
+                        Text("CHANNELS").font(.system(size: 15, weight: .black)).tracking(1.6)
+                            .foregroundStyle(.white).padding(.horizontal, m.hPad).padding(.top, 6)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(leagueChannels) { channel in
+                                    Button { store.show(.player(event: nil, channel: channel)) } label: {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(channel.name).font(.system(size: 13, weight: .semibold))
+                                                .foregroundStyle(.white).lineLimit(1)
+                                            if let now = channel.guide?.now?.title {
+                                                Text(now).font(.system(size: 11))
+                                                    .foregroundStyle(RallyTheme.rallyCyan).lineLimit(1)
+                                            } else {
+                                                Text(channel.category).font(.system(size: 11))
+                                                    .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
+                                            }
+                                        }
+                                        .padding(12)
+                                        .frame(width: 220, alignment: .leading)
+                                        .background(Color.white.opacity(0.05))
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, m.hPad)
+                        }
+                    }
                 } else if tab == 1 {
                     Text("STANDINGS").font(.system(size: 15, weight: .black)).tracking(1.6)
                         .foregroundStyle(.white).padding(.horizontal, m.hPad)
@@ -139,13 +177,28 @@ struct TvLeagueCenter: View {
         fmt.dateFormat = "EEE MMM d"
         return fmt.string(from: date).uppercased()
     }
-
     private func loadHub() async {
         guard let entry = EspnClient.leagues.first(where: { $0.league == league }) else { return }
         async let table = store.espnClient.fetchStandings(sport: entry.sport, league: entry.path)
         await store.ensureChannels()
-        standings = await table
+        let official = await table
+        // Off-season the endpoint publishes no table (link only) — fall back
+        // to in-feed records so the tab survives instead of vanishing.
+        standings = official.isEmpty ? inFeedStandings() : official
         redZone = LeagueHub.redZoneChannel(in: store.channels)
+    }
+
+    private func inFeedStandings() -> [StandingEntry] {
+        var map: [String: StandingEntry] = [:]
+        for e in leagueEvents {
+            for t in [e.homeTeam, e.awayTeam].compactMap({ $0 }) {
+                if map[t.id] == nil, let rec = t.records.first?.summary {
+                    map[t.id] = StandingEntry(teamId: t.id, name: t.name, abbreviation: t.abbreviation,
+                                             logoUrl: t.logoUrl, summary: rec)
+                }
+            }
+        }
+        return map.values.sorted { $0.name < $1.name }
     }
 
     private func loadDay() async {

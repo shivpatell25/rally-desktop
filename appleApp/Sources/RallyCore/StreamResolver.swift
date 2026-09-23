@@ -49,7 +49,6 @@ public enum StreamResolver {
         let relevant = Dictionary(uniqueKeysWithValues: EventMatcher.relevantChannels(event: event, channels: channels, tvStations: stations)
             .map { ($0.channel.id, $0) })
         for ch in channels {
-            let guideText = [ch.guide?.now?.title, ch.guide?.next?.title].compactMap { $0 }.joined(separator: " ")
             let guideTitle = ch.guide?.now?.title ?? ""
             let exactFromGuide = !guideTitle.isEmpty && StreamSelector.textMatchesEvent(guideTitle, event: event)
             let exactFromName = StreamSelector.textMatchesEvent(ch.name, event: event)

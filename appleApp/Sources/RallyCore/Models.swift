@@ -142,12 +142,17 @@ public struct StandingEntry: Codable, Sendable, Equatable, Identifiable {
     public var ties: Int?
     public var pct: String?
     public var gamesBehind: String?
+    /// In-feed fallback line (off-season: no official table published).
+    public var summary: String?
     public init(teamId: String, name: String, abbreviation: String, logoUrl: String? = nil,
-                wins: Int = 0, losses: Int = 0, ties: Int? = nil, pct: String? = nil, gamesBehind: String? = nil) {
+                wins: Int = 0, losses: Int = 0, ties: Int? = nil, pct: String? = nil, gamesBehind: String? = nil,
+                summary: String? = nil) {
         self.teamId = teamId; self.name = name; self.abbreviation = abbreviation; self.logoUrl = logoUrl
         self.wins = wins; self.losses = losses; self.ties = ties; self.pct = pct; self.gamesBehind = gamesBehind
+        self.summary = summary
     }
     public var recordLine: String {
+        if let summary, !summary.isEmpty { return summary }
         var parts = ["\(wins)-\(losses)"]
         if let ties, ties > 0 { parts.append("\(ties)") }
         var line = parts.joined(separator: "-")

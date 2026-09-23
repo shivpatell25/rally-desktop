@@ -141,4 +141,10 @@ final class LeagueHubTests: XCTestCase {
         XCTAssertEqual(LeagueHub.redZoneChannel(in: channels)?.id, "2")
         XCTAssertNil(LeagueHub.redZoneChannel(in: [channels[0]]))
     }
+
+    func testSummaryFallbackLine() {
+        XCTAssertEqual(StandingEntry(teamId: "1", name: "Falcons", abbreviation: "ATL", summary: "0-2").recordLine, "0-2")
+        XCTAssertEqual(StandingEntry(teamId: "1", name: "Bills", abbreviation: "BUF", wins: 11, losses: 6, pct: ".647").recordLine,
+                       "11-6 · .647")
+    }
 }
