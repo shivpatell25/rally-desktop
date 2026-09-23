@@ -81,3 +81,64 @@ final class TeamHubTests: XCTestCase {
         XCTAssertTrue(injuries.isEmpty)
     }
 }
+
+/// Standings endpoint + playoff/RedZone helpers (Android getLeagueHub).
+final class LeagueHubTests: XCTestCase {
+    private func client() -> EspnClient {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        return EspnClient(session: URLSession(configuration: config))
+    }
+
+    override func tearDown() {
+        StubURLProtocol.result = nil
+        super.tearDown()
+    }
+
+    func testFetchStandings() async {
+        StubURLProtocol.result = { _ in (200, [:], """
+            {"children": [{"name": "AFC East", "standings": {"entries": [
+              {"team": {"id": "2", "displayName": "Buffalo Bills", "abbreviation": "BUF"},
+               "stats": [{"name": "wins", "value": 11}, {"name": "losses", "value": 6},
+                         {"name": "winPercent", "displayValue": ".647"},
+                         {"name": "gamesBehind", "displayValue": "-"}]},
+              {"team": {"id": "1", "displayName": "Atlanta Falcons", "abbreviation": "ATL"},
+               "stats": [{"name": "wins", "value": 0}, {"name": "losses", "value": 2}]}
+            ]}}]}
+            """.data(using: .utf8)) }
+        let rows = await client().fetchStandings(sport: "football", league: "nfl")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].abbreviation, "BUF")
+        XCTAssertEqual(rows[0].recordLine, "11-6 · .647")
+        XCTAssertEqual(rows[1].recordLine, "0-2")
+    }
+
+    func testPostseasonFilter() {
+        func event(_ name: String) -> SportEvent {
+            SportEvent(id: name, name: name, startTime: Date(), status: .notStarted,
+                       sport: "football", league: "NFL")
+        }
+        XCTAssertTrue(LeagueHub.isPostseasonEvent(event("AFC Wild Card: Bills at Chiefs")))
+        XCTAssertTrue(LeagueHub.isPostseasonEvent(event("Super Bowl LX")))
+        // Bare "Final" is a finished game, not the finals.
+        XCTAssertFalse(LeagueHub.isPostseasonEvent(event("Bills 24, Chiefs 21 Final")))
+        XCTAssertFalse(LeagueHub.isPostseasonEvent(event("Week 2: Bills at Dolphins")))
+    }
+
+    func testPlayoffCutoffs() {
+        XCTAssertEqual(LeagueHub.playoffCutoff(league: "NFL"), 14)
+        XCTAssertEqual(LeagueHub.playoffCutoff(league: "NBA"), 16)
+        XCTAssertEqual(LeagueHub.playoffCutoff(league: "NHL"), 16)
+        XCTAssertEqual(LeagueHub.playoffCutoff(league: "MLB"), 12)
+        XCTAssertEqual(LeagueHub.playoffCutoff(league: "EPL"), 8)
+    }
+
+    func testRedZoneLookup() {
+        let channels = [
+            IptvChannel(id: "1", number: "1", name: "ESPN HD"),
+            IptvChannel(id: "2", number: "2", name: "NFL RedZone 1080p"),
+        ]
+        XCTAssertEqual(LeagueHub.redZoneChannel(in: channels)?.id, "2")
+        XCTAssertNil(LeagueHub.redZoneChannel(in: [channels[0]]))
+    }
+}

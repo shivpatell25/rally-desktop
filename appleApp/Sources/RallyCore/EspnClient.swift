@@ -403,4 +403,42 @@ public final class EspnClient: Sendable {
                                detail: Self.str(item, ["details", "shortComment", "comment", "description"]))
         }
     }
+
+    /// Official league table (Android `getLeagueHub` standings source — works
+    /// even when the game feed is empty, unlike the old in-feed records).
+    public func fetchStandings(sport: String, league: String) async -> [StandingEntry] {
+        guard let url = URL(string: "\(Self.baseURL)sports/\(sport)/\(league)/standings") else { return [] }
+        guard let root = await getJson(url) as? [String: Any] else { return [] }
+        var out: [StandingEntry] = []
+        for child in (root["children"] as? [[String: Any]]) ?? [] {
+            let groups: [[String: Any]]
+            if let s = child["standings"] as? [String: Any] { groups = [s] } else { groups = [child] }
+            for group in groups {
+                for entry in (group["entries"] as? [[String: Any]]) ?? [] {
+                    let team = entry["team"] as? [String: Any]
+                    let stats = (entry["stats"] as? [[String: Any]]) ?? []
+                    func stat(_ name: String) -> [String: Any]? {
+                        stats.first { ($0["name"] as? String) == name }
+                    }
+                    func intStat(_ name: String) -> Int {
+                        if let v = stat(name)?["value"] as? Int { return v }
+                        if let s = stat(name)?["displayValue"] as? String, let v = Int(s) { return v }
+                        return 0
+                    }
+                    let logos = team?["logos"] as? [[String: Any]]
+                    out.append(StandingEntry(
+                        teamId: Self.str(team ?? [:], ["id"]) ?? "",
+                        name: Self.str(team ?? [:], ["displayName", "name"]) ?? "?",
+                        abbreviation: Self.str(team ?? [:], ["abbreviation", "shortName"]) ?? "?",
+                        logoUrl: logos?.first.flatMap { $0["href"] as? String } ?? (team?["logo"] as? String),
+                        wins: intStat("wins"), losses: intStat("losses"),
+                        ties: stat("ties").flatMap { ($0["value"] as? Int) ?? Int(($0["displayValue"] as? String) ?? "") },
+                        pct: stat("winPercent")?["displayValue"] as? String ?? stat("pct")?["displayValue"] as? String,
+                        gamesBehind: stat("gamesBehind")?["displayValue"] as? String ?? stat("gb")?["displayValue"] as? String))
+                }
+            }
+        }
+        var seen = Set<String>()
+        return out.filter { seen.insert($0.id).inserted }
+    }
 }

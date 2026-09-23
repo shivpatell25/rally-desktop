@@ -130,6 +130,32 @@ public struct InjuryEntry: Codable, Sendable, Equatable, Identifiable {
     }
     private enum CodingKeys: String, CodingKey { case playerName, position, status, detail }
 }
+
+public struct StandingEntry: Codable, Sendable, Equatable, Identifiable {
+    public var id: String { teamId.isEmpty ? abbreviation : teamId }
+    public var teamId: String
+    public var name: String
+    public var abbreviation: String
+    public var logoUrl: String?
+    public var wins: Int
+    public var losses: Int
+    public var ties: Int?
+    public var pct: String?
+    public var gamesBehind: String?
+    public init(teamId: String, name: String, abbreviation: String, logoUrl: String? = nil,
+                wins: Int = 0, losses: Int = 0, ties: Int? = nil, pct: String? = nil, gamesBehind: String? = nil) {
+        self.teamId = teamId; self.name = name; self.abbreviation = abbreviation; self.logoUrl = logoUrl
+        self.wins = wins; self.losses = losses; self.ties = ties; self.pct = pct; self.gamesBehind = gamesBehind
+    }
+    public var recordLine: String {
+        var parts = ["\(wins)-\(losses)"]
+        if let ties, ties > 0 { parts.append("\(ties)") }
+        var line = parts.joined(separator: "-")
+        if let pct, !pct.isEmpty { line += " · \(pct)" }
+        if let gamesBehind, !gamesBehind.isEmpty, gamesBehind != "-" && gamesBehind != "–" { line += " · \(gamesBehind) GB" }
+        return line
+    }
+}
 public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var name: String

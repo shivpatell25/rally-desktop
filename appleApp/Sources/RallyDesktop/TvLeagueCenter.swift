@@ -10,29 +10,27 @@ struct TvLeagueCenter: View {
     @State private var tab = 0
     @State private var dayOffset = 0
     @State private var dayEvents: [SportEvent]?
+    @State private var dayError: String?
     @State private var loadingDay = false
+    @State private var standings: [StandingEntry] = []
+    @State private var redZone: IptvChannel?
     @FocusState private var focus: String?
 
     private var leagueEvents: [SportEvent] {
         store.events.filter { $0.league == league }
     }
     private var teamCount: Int {
-        Set(leagueEvents.flatMap { [$0.homeTeam?.id, $0.awayTeam?.id].compactMap { $0 } }).count
+        standings.isEmpty
+            ? Set(leagueEvents.flatMap { [$0.homeTeam?.id, $0.awayTeam?.id].compactMap { $0 } }).count
+            : standings.count
     }
-    private var standings: [(team: String, record: String)] {
-        var map: [String: String] = [:]
-        for e in leagueEvents {
-            for t in [e.homeTeam, e.awayTeam].compactMap({ $0 }) {
-                if map[t.id] == nil, let rec = t.records.first?.summary {
-                    map[t.id] = "\(t.name)§\(rec)"
-                }
-            }
-        }
-        return map.values.compactMap { v in
-            let parts = v.split(separator: "§", maxSplits: 1).map(String.init)
-            return parts.count == 2 ? (parts[0], parts[1]) : nil
-        }.sorted { $0.team < $1.team }
+    private var postseasonGames: [SportEvent] {
+        LeagueHub.postseasonEvents(from: leagueEvents)
     }
+    private var playoffSeeds: [StandingEntry] {
+        LeagueHub.playoffPicture(standings: standings, league: league)
+    }
+    private var showPlayoffs: Bool { !postseasonGames.isEmpty || !playoffSeeds.isEmpty }
 
     var body: some View {
         ScrollView {
@@ -49,11 +47,21 @@ struct TvLeagueCenter: View {
                             .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
-                    HStack(spacing: 10) {
-                        leagueButton("Back") { store.pendingLeague = nil }
-                        leagueButton("Games", primary: tab == 0) { tab = 0 }
-                        if !standings.isEmpty {
-                            leagueButton("Standings", primary: tab == 1) { tab = 1 }
+                    VStack(alignment: .trailing, spacing: 8) {
+                        HStack(spacing: 10) {
+                            leagueButton("Back") { store.pendingLeague = nil }
+                            leagueButton("Games", primary: tab == 0) { tab = 0 }
+                            if !standings.isEmpty {
+                                leagueButton("Standings", primary: tab == 1) { tab = 1 }
+                            }
+                            if showPlayoffs {
+                                leagueButton("Playoffs", primary: tab == 2) { tab = 2 }
+                            }
+                        }
+                        if league.lowercased() == "nfl", let rz = redZone {
+                            leagueButton("● RedZone", primary: true) {
+                                store.show(.player(event: nil, channel: rz))
+                            }
                         }
                     }
                 }
@@ -64,20 +72,38 @@ struct TvLeagueCenter: View {
                     dayPager
                     if loadingDay {
                         ProgressView().padding(.horizontal, m.hPad)
-                    } else if let day = dayEvents, !day.isEmpty {
-                        portraitGrid(day)
+                    } else if let error = dayError {
+                        Text(error).font(.callout).foregroundStyle(RallyTheme.liveRed)
+                            .padding(.horizontal, m.hPad)
+                    } else if let day = dayEvents {
+                        if day.isEmpty {
+                            Text("No games are listed for this date.")
+                                .font(.callout).foregroundStyle(RallyTheme.textSecondary)
+                                .padding(.horizontal, m.hPad)
+                        } else {
+                            portraitGrid(day)
+                        }
                     } else {
                         portraitGrid(leagueEvents)
                     }
-                } else {
+                } else if tab == 1 {
                     Text("STANDINGS").font(.system(size: 15, weight: .black)).tracking(1.6)
                         .foregroundStyle(.white).padding(.horizontal, m.hPad)
                     standingsGrid
+                } else {
+                    Text("PLAYOFFS").font(.system(size: 15, weight: .black)).tracking(1.6)
+                        .foregroundStyle(.white).padding(.horizontal, m.hPad)
+                    if !postseasonGames.isEmpty {
+                        portraitGrid(postseasonGames)
+                    } else {
+                        playoffGrid
+                    }
                 }
             }
             .padding(.bottom, 18)
         }
         .background { AmbientBackground() }
+        .task { await loadHub() }
         .task(id: dayOffset) { await loadDay() }
     }
 
@@ -96,11 +122,34 @@ struct TvLeagueCenter: View {
             }
             Button("›") { dayOffset += 1 }.buttonStyle(.plain)
                 .font(.system(size: 20, weight: .bold)).foregroundStyle(RallyTheme.textSecondary)
+            if dayOffset != 0 {
+                Button("Today") { dayOffset = 0 }.buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(RallyTheme.rallyCyan)
+            }
+            if abs(dayOffset) > 1 {
+                Text(dayLabel).font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+            }
         }
         .padding(.horizontal, m.hPad)
     }
 
+    private var dayLabel: String {
+        let date = Calendar.current.date(byAdding: .day, value: dayOffset, to: Date()) ?? Date()
+        let fmt = DateFormatter()
+        fmt.dateFormat = "EEE MMM d"
+        return fmt.string(from: date).uppercased()
+    }
+
+    private func loadHub() async {
+        guard let entry = EspnClient.leagues.first(where: { $0.league == league }) else { return }
+        async let table = store.espnClient.fetchStandings(sport: entry.sport, league: entry.path)
+        await store.ensureChannels()
+        standings = await table
+        redZone = LeagueHub.redZoneChannel(in: store.channels)
+    }
+
     private func loadDay() async {
+        dayError = nil
         guard dayOffset != 0,
               let entry = EspnClient.leagues.first(where: { $0.league == league }) else {
             dayEvents = nil
@@ -112,8 +161,14 @@ struct TvLeagueCenter: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd"
         fmt.timeZone = TimeZone(identifier: "UTC")
-        dayEvents = (try? await EspnClient().fetchScoreboard(sport: entry.sport, league: entry.path,
-            domainLeague: league, dates: fmt.string(from: date))) ?? []
+        do {
+            dayEvents = try await EspnClient().fetchScoreboard(sport: entry.sport, league: entry.path,
+                domainLeague: league, dates: fmt.string(from: date))
+        } catch {
+            // No silent wrong-day fallback: say so and keep Today visible.
+            dayEvents = nil
+            dayError = "Couldn't load that date. Check your connection and try again."
+        }
     }
 
     private func portraitGrid(_ events: [SportEvent]) -> some View {
@@ -129,12 +184,31 @@ struct TvLeagueCenter: View {
 
     private var standingsGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-            ForEach(standings, id: \.team) { row in
+            ForEach(standings) { row in
                 VStack(alignment: .leading, spacing: 6) {
                     Text("STANDING").font(.system(size: 9, weight: .bold)).tracking(0.8)
                         .foregroundStyle(RallyTheme.textTertiary)
-                    Text(row.team).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                    Text(row.record).font(.system(size: 12)).foregroundStyle(RallyTheme.rallyCyan)
+                    Text(row.name).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                    Text(row.recordLine).font(.system(size: 12)).foregroundStyle(RallyTheme.rallyCyan)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RallyTheme.surfaceRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
+            }
+        }
+        .padding(.horizontal, m.hPad)
+    }
+
+    private var playoffGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+            ForEach(Array(playoffSeeds.enumerated()), id: \.element.id) { index, row in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("SEED \(index + 1)").font(.system(size: 9, weight: .bold)).tracking(0.8)
+                        .foregroundStyle(RallyTheme.textTertiary)
+                    Text(row.name).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                    Text(row.recordLine).font(.system(size: 12)).foregroundStyle(RallyTheme.rallyCyan)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
