@@ -19,6 +19,8 @@ public final class VlcEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var reserved: Set<String> = []
     private var players: [String: VLCMediaPlayer] = [:]
+    private var observers: [String: VlcBufferObserver] = [:]
+    private var relays: [String: HTTPStreamProxy] = [:]
 
     public init() {}
 
@@ -36,7 +38,9 @@ public final class VlcEngine: @unchecked Sendable {
     public func release(slotId: String) {
         lock.withLock {
             reserved.remove(slotId)
+            observers.removeValue(forKey: slotId)
             players.removeValue(forKey: slotId)?.stop()
+            relays.removeValue(forKey: slotId)?.stop()
         }
     }
 
@@ -44,11 +48,24 @@ public final class VlcEngine: @unchecked Sendable {
         lock.withLock {
             reserved.removeAll()
             players.values.forEach { $0.stop() }
-            players.removeAll()
+            players.removeAll(); observers.removeAll()
+            relays.values.forEach { $0.stop() }; relays.removeAll()
         }
     }
 
     public var tileCount: Int { lock.withLock { reserved.count } }
+
+    /// VLC supports UA/Referer directly. Other provider headers need a local
+    /// streaming relay so DASH segments and redirected playlists retain them.
+    public func prepareURL(slotId: String, url: URL, headers: [String: String]) async throws -> URL {
+        lock.withLock { relays.removeValue(forKey: slotId) }?.stop()
+        guard headers.keys.contains(where: { !["user-agent", "referer"].contains($0.lowercased()) }) else { return url }
+        let relay = HTTPStreamProxy(url: url, headers: headers)
+        let local = try await relay.start()
+        guard !Task.isCancelled, lock.withLock({ reserved.contains(slotId) }) else { relay.stop(); throw CancellationError() }
+        lock.withLock { relays[slotId] = relay }
+        return local
+    }
 
     /// Starts playback on a reserved tile. Throws `.tileCapReached` for a new
     /// slotId past the cap, `.unreservedSlot` when the slot was released.
@@ -59,7 +76,7 @@ public final class VlcEngine: @unchecked Sendable {
 
     @MainActor
     public func play(slotId: String, title: String, url: URL, headers: [String: String]? = nil,
-                     tuning: PlaybackTuning? = nil, drawable: NSView? = nil) throws {
+                     tuning: PlaybackTuning? = nil, drawable: NSView? = nil, maxHeight: Int = 0, renderVideo: Bool = true) throws {
         let known: Bool = lock.withLock { reserved.contains(slotId) }
         guard known else { throw Error.unreservedSlot }
         if lock.withLock({ players[slotId] == nil }) && tileCount > Self.maxTiles {
@@ -67,11 +84,15 @@ public final class VlcEngine: @unchecked Sendable {
         }
         let player: VLCMediaPlayer = lock.withLock {
             if let existing = players[slotId] { return existing }
-            let created = VLCMediaPlayer()
+            let created = renderVideo ? VLCMediaPlayer() : VLCMediaPlayer(options: ["--vout=dummy", "--quiet"])
+            let observer = VlcBufferObserver(); created.delegate = observer
+            observers[slotId] = observer
             players[slotId] = created
             return created
         }
+        lock.withLock { observers[slotId] }?.setProgress(0)
         guard let media = VLCMedia(url: url) else { throw Error.mediaInitFailed }
+        media.addOptions(["adaptive-maxheight": maxHeight])
         for (key, value) in vlcOptions(from: headers) { media.addOptions([key: value]) }
         if let tuning {
             for (key, value) in tuning.mediaOptions { media.addOptions([key: value]) }
@@ -84,6 +105,7 @@ public final class VlcEngine: @unchecked Sendable {
     @MainActor
     public func stop(slotId: String) {
         lock.withLock { players[slotId] }?.stop()
+        lock.withLock { relays.removeValue(forKey: slotId) }?.stop()
     }
 
     @MainActor
@@ -99,12 +121,12 @@ public final class VlcEngine: @unchecked Sendable {
     @MainActor
     public func setMuted(slotId: String, muted: Bool) {
         guard let player = lock.withLock({ players[slotId] }) else { return }
-        player.audio?.volume = muted ? 0 : 100
+        player.audio?.isMuted = muted
     }
 
     @MainActor
     public func isMuted(slotId: String) -> Bool {
-        (lock.withLock({ players[slotId] })?.audio?.volume ?? 100) == 0
+        lock.withLock({ players[slotId] })?.audio?.isMuted ?? false
     }
 
     @MainActor
@@ -121,9 +143,44 @@ public final class VlcEngine: @unchecked Sendable {
         return (fraction, String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60))
     }
 
-    /// Forwards what libVLC honors: User-Agent and Referer. libVLC exposes no
-    /// media option that injects Cookie/Authorization request headers — those
-    /// streams route to AVPlayer (`PlaybackController`) via `PlaybackRoute`.
+    @MainActor public func seekable(slotId: String) -> Bool { lock.withLock { players[slotId] }?.isSeekable ?? false }
+    @MainActor public func seek(slotId: String, fraction: Double) {
+        guard let player = lock.withLock({ players[slotId] }), player.isSeekable else { return }
+        player.position = min(1, max(0, fraction))
+    }
+    @MainActor public func seekRelative(slotId: String, seconds: Double) {
+        guard let player = lock.withLock({ players[slotId] }), player.isSeekable else { return }
+        let ms = max(0, Int(player.time.intValue) + Int(seconds * 1000))
+        player.time = VLCTime(int: Int32(ms))
+    }
+    @MainActor public func elapsedSeconds(slotId: String) -> Double? {
+        guard let player = lock.withLock({ players[slotId] }) else { return nil }
+        return Double(player.time.intValue) / 1000
+    }
+    @MainActor public func tracks(slotId: String, captions: Bool) -> [PlaybackTrack] {
+        guard let player = lock.withLock({ players[slotId] }) else { return [] }
+        return (captions ? player.textTracks : player.audioTracks).enumerated().map {
+            PlaybackTrack(id: $0.offset, title: $0.element.trackName, selected: $0.element.isSelected)
+        }
+    }
+    @MainActor public func selectTrack(slotId: String, id: Int, captions: Bool) {
+        guard let player = lock.withLock({ players[slotId] }) else { return }
+        let tracks = captions ? player.textTracks : player.audioTracks
+        if captions && id < 0 { player.deselectAllTextTracks() }
+        else if tracks.indices.contains(id) { tracks[id].isSelectedExclusively = true }
+    }
+    @MainActor public func setVolume(slotId: String, value: Double) {
+        lock.withLock { players[slotId] }?.audio?.volume = Int32(min(100, max(0, value * 100)))
+    }
+    @MainActor public func isBuffering(slotId: String) -> Bool {
+        guard let state = lock.withLock({ players[slotId] })?.state else { return false }
+        return state == .opening || (lock.withLock { observers[slotId] }?.buffering ?? false)
+    }
+    @MainActor public func hasError(slotId: String) -> Bool {
+        lock.withLock { players[slotId] }?.state == .error
+    }
+
+    /// Headers supported directly by libVLC; other headers use prepareURL.
     func vlcOptions(from headers: [String: String]?) -> [String: String] {
         guard let headers else { return [:] }
         var out: [String: String] = [:]
@@ -136,4 +193,12 @@ public final class VlcEngine: @unchecked Sendable {
         }
         return out
     }
+}
+
+private final class VlcBufferObserver: NSObject, VLCMediaPlayerDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var progress: Float = 1
+    var buffering: Bool { lock.withLock { progress < 1 } }
+    func setProgress(_ value: Float) { lock.withLock { progress = value } }
+    func mediaPlayerBufferingChanged(_ progress: Float) { setProgress(progress) }
 }

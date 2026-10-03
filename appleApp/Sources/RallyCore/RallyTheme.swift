@@ -1,32 +1,31 @@
 import SwiftUI
 
-/// 1:1 color tokens from `presentation/theme/AppleTvTheme.kt`.
-/// Same hex, same roles — glass alpha layers, no realtime blur (cheap on low-end GPUs).
+/// Rally TV palette shared by the approved compositions and Apple TV reference.
 public enum RallyTheme {
-    public static let rallyLime = Color(red: 0xEA/255, green: 0xFB/255, blue: 0x78/255)
-    public static let rallyMint = Color(red: 0xB8/255, green: 0xF3/255, blue: 0xC7/255)
-    public static let rallyCyan = Color(red: 0x6F/255, green: 0xCF/255, blue: 0xF6/255)
-    public static let deepNavy = Color(red: 0x05/255, green: 0x08/255, blue: 0x0F/255)
-    public static let slate = Color(red: 0x0F/255, green: 0x17/255, blue: 0x24/255)
-    public static let graphite = Color(red: 0x20/255, green: 0x28/255, blue: 0x34/255)
-    public static let offWhite = Color(red: 0xF5/255, green: 0xF7/255, blue: 0xFA/255)
+    public static let rallyLime = Color(red: 0xE5/255, green: 0xEE/255, blue: 0x92/255)
+    public static let rallyMint = Color(red: 0xAA/255, green: 0xE7/255, blue: 0xCE/255)
+    public static let rallyCyan = Color(red: 0x5E/255, green: 0xDB/255, blue: 0xF0/255)
+    public static let deepNavy = Color(red: 0x05/255, green: 0x05/255, blue: 0x07/255)
+    public static let slate = Color(red: 0x10/255, green: 0x13/255, blue: 0x17/255)
+    public static let graphite = Color(red: 0x25/255, green: 0x2B/255, blue: 0x30/255)
+    public static let offWhite = Color(red: 0xFF/255, green: 0xFF/255, blue: 0xFF/255)
 
     public static let background = deepNavy
     public static let backgroundElevated = slate
-    public static let glassSurface = Color(red: 0x0A/255, green: 0x10/255, blue: 0x1B/255, opacity: 0xA6/255)
-    public static let glassBorder = Color(red: 0x6B/255, green: 0x89/255, blue: 0xA5/255, opacity: 0x59/255)
-    public static let glassBorderFocused = rallyCyan
-    public static let surfaceBase = Color(red: 0x0A/255, green: 0x10/255, blue: 0x1B/255)
-    public static let surfaceRaised = Color(red: 0x11/255, green: 0x1B/255, blue: 0x2A/255)
-    public static let surfaceFocused = Color(red: 0x17/255, green: 0x24/255, blue: 0x37/255)
+    public static let glassSurface = Color(red: 0x10/255, green: 0x13/255, blue: 0x17/255)
+    public static let glassBorder = Color(red: 0x25/255, green: 0x2B/255, blue: 0x30/255)
+    public static let glassBorderFocused = Color.white.opacity(0.65)
+    public static let surfaceBase = Color(red: 0x10/255, green: 0x13/255, blue: 0x17/255)
+    public static let surfaceRaised = Color(red: 0x17/255, green: 0x1B/255, blue: 0x20/255)
+    public static let surfaceFocused = Color(red: 0x20/255, green: 0x26/255, blue: 0x2B/255)
 
-    public static let accent = rallyCyan
-    public static let liveRed = Color(red: 1, green: 0x45/255, blue: 0x3A/255)
+    public static let accent = offWhite
+    public static let liveRed = Color(red: 0xFF/255, green: 0x33/255, blue: 0x48/255)
     public static let goldBadge = Color(red: 1, green: 0xD6/255, blue: 0x0A/255)
 
     public static let textPrimary = offWhite
-    public static let textSecondary = offWhite.opacity(0xB8/255)
-    public static let textTertiary = offWhite.opacity(0x73/255)
+    public static let textSecondary = Color(red: 0xAE/255, green: 0xB4/255, blue: 0xBD/255)
+    public static let textTertiary = Color(red: 0x73/255, green: 0x7C/255, blue: 0x88/255)
 
     public static let heroCorner: CGFloat = 12
     public static let cardCorner: CGFloat = 10

@@ -62,17 +62,17 @@ struct TvTeamHub: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("MY TEAMS · \(team.league.uppercased())")
-                    .font(.system(size: 11, weight: .bold)).tracking(1.2)
-                    .foregroundStyle(RallyTheme.rallyCyan)
-                Text(team.name).font(.system(size: 26, weight: .black)).foregroundStyle(.white)
+                    .font(RallyFont.font(size: 11, weight: .bold)).tracking(1.2)
+                    .foregroundStyle(RallyTheme.textPrimary)
+                Text(team.name).font(RallyFont.font(size: 26, weight: .black)).foregroundStyle(.white)
                 if let summary = standing?.summary {
-                    Text(summary).font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary)
+                    Text(summary).font(RallyFont.font(size: 13)).foregroundStyle(RallyTheme.textSecondary)
                 }
             }
             Spacer()
             if isFavorite {
                 Button("Remove") { _ = settings.toggleFavoriteTeam(team) }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(RallyFont.font(size: 13, weight: .semibold))
                     .foregroundStyle(RallyTheme.textPrimary)
                     .padding(.horizontal, 18).padding(.vertical, 8)
                     .background(Color.white.opacity(0.08))
@@ -84,11 +84,11 @@ struct TvTeamHub: View {
 
     private var notFavorite: some View {
         VStack(spacing: 10) {
-            Text("Not in your teams").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+            Text("Not in your teams").font(RallyFont.font(size: 16, weight: .semibold)).foregroundStyle(.white)
             Text("Add \(team.name) to get their schedule, roster, and injuries here.")
                 .font(.callout).foregroundStyle(RallyTheme.textSecondary)
             Button("Add team") { _ = settings.toggleFavoriteTeam(team) }
-                .font(.system(size: 14, weight: .semibold)).foregroundStyle(.black)
+                .font(RallyFont.font(size: 14, weight: .semibold)).foregroundStyle(.black)
                 .padding(.horizontal, 24).padding(.vertical, 10)
                 .background(RallyTheme.offWhite).clipShape(RoundedRectangle(cornerRadius: 16))
                 .buttonStyle(.plain)
@@ -101,7 +101,7 @@ struct TvTeamHub: View {
         HStack(spacing: 8) {
             ForEach(["Overview", "Games", "Roster", "Injuries"].indices, id: \.self) { i in
                 Button(["Overview", "Games", "Roster", "Injuries"][i]) { tab = i }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(RallyFont.font(size: 13, weight: .semibold))
                     .foregroundStyle(tab == i ? .black : RallyTheme.textPrimary)
                     .padding(.horizontal, 18).padding(.vertical, 8)
                     .background(tab == i ? RallyTheme.offWhite : Color.white.opacity(0.08))
@@ -115,25 +115,25 @@ struct TvTeamHub: View {
         VStack(alignment: .leading, spacing: 10) {
             glassSection(title: "SEASON") {
                 if let summary = standing?.summary {
-                    Text(summary).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                    Text(summary).font(RallyFont.font(size: 15, weight: .semibold)).foregroundStyle(.white)
                 }
                 if let rank = standing?.rank, !rank.isEmpty {
-                    Text("Rank \(rank)").font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary)
+                    Text("Rank \(rank)").font(RallyFont.font(size: 13)).foregroundStyle(RallyTheme.textSecondary)
                 }
                 if standing?.summary == nil {
-                    Text("Season data is unavailable.").font(.system(size: 13))
+                    Text("Season data is unavailable.").font(RallyFont.font(size: 13))
                         .foregroundStyle(RallyTheme.textSecondary)
                 }
             }
             let next = schedule.first { $0.status != .finished }
             if let next {
-                Text("NEXT GAME").font(.system(size: 11, weight: .bold)).tracking(1)
+                Text("NEXT GAME").font(RallyFont.font(size: 11, weight: .bold)).tracking(1)
                     .foregroundStyle(RallyTheme.textSecondary)
                 GameRow(event: next).onTapGesture { store.show(.eventDetail(next)) }
             }
             let last5 = Array(schedule.filter { $0.status == .finished }.suffix(5).reversed())
             if !last5.isEmpty {
-                Text("RECENT FORM").font(.system(size: 11, weight: .bold)).tracking(1)
+                Text("RECENT FORM").font(RallyFont.font(size: 11, weight: .bold)).tracking(1)
                     .foregroundStyle(RallyTheme.textSecondary)
                 ForEach(last5) { event in
                     GameRow(event: event).onTapGesture { store.show(.eventDetail(event)) }
@@ -169,11 +169,16 @@ struct TvTeamHub: View {
                         .frame(width: 40, height: 40).clipShape(Circle())
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(player.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                        Text(player.name).font(RallyFont.font(size: 14, weight: .semibold)).foregroundStyle(.white)
                         Text([player.position, player.jersey.map { "#\($0)" }].compactMap { $0 }.joined(separator: " · "))
-                            .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                            .font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
+                    Button {
+                        if settings.favoritePlayerIds.contains(player.id) { settings.favoritePlayerIds.remove(player.id) }
+                        else { settings.favoritePlayerIds.insert(player.id) }
+                    } label: { Image(systemName: settings.favoritePlayerIds.contains(player.id) ? "star.fill" : "star") }
+                        .buttonStyle(.plain).foregroundStyle(RallyTheme.textPrimary).help("Favorite player")
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(Color.white.opacity(0.05))
@@ -190,9 +195,9 @@ struct TvTeamHub: View {
             }
             ForEach(injuries) { injury in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(injury.playerName).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text(injury.playerName).font(RallyFont.font(size: 14, weight: .semibold)).foregroundStyle(.white)
                     Text([injury.position, injury.status, injury.detail].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                        .font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,7 +209,7 @@ struct TvTeamHub: View {
 
     private func glassSection(title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 11, weight: .bold)).tracking(1)
+            Text(title).font(RallyFont.font(size: 11, weight: .bold)).tracking(1)
                 .foregroundStyle(RallyTheme.textSecondary)
             content()
         }

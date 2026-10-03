@@ -15,38 +15,56 @@ struct ScoreSaverOverlay: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.92).ignoresSafeArea()
-            VStack(spacing: 18) {
-                Text(now.formatted(date: .omitted, time: .shortened))
-                    .font(.system(size: 64, weight: .thin)).foregroundStyle(.white)
-                Text(now.formatted(.dateTime.weekday(.wide).month().day()))
-                    .font(.system(size: 15)).foregroundStyle(RallyTheme.textSecondary)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 12)], spacing: 12) {
-                    ForEach(cards) { event in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(event.league).font(.system(size: 10, weight: .bold)).tracking(1)
-                                .foregroundStyle(RallyTheme.rallyCyan)
-                            Text(event.name).font(.system(size: 15, weight: .bold)).foregroundStyle(.white).lineLimit(1)
-                            if event.status == .live || event.status == .finished {
-                                Text("\(event.awayTeam?.abbreviation ?? "") \(event.scoreAway.map(String.init) ?? "") – \(event.scoreHome.map(String.init) ?? "") \(event.homeTeam?.abbreviation ?? "")")
-                                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                            } else {
-                                Text(event.startTime.formatted(date: .omitted, time: .shortened))
-                                    .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary)
+        GeometryReader { geo in
+            let compact = geo.size.height < 680
+            let columns = geo.size.width >= 1180 ? 4 : geo.size.width >= 620 ? 2 : 1
+            let inset: CGFloat = geo.size.width < 620 ? 24 : 48
+            ZStack {
+                AmbientBackground()
+                Color.black.opacity(0.38).ignoresSafeArea()
+                VStack(spacing: compact ? 16 : 26) {
+                    if let wordmark = tvArt("rally_wordmark") {
+                        Image(nsImage: wordmark).resizable().scaledToFit().frame(width: 116, height: 42)
+                    }
+                    VStack(spacing: 8) {
+                        Text(now.formatted(date: .omitted, time: .shortened))
+                            .font(RallyFont.font(size: compact ? 54 : 76, weight: .light))
+                            .foregroundStyle(.white).monospacedDigit()
+                        Text(now.formatted(.dateTime.weekday(.wide).month().day()))
+                            .font(RallyFont.font(size: 15)).foregroundStyle(RallyTheme.textSecondary)
+                    }
+                    if !cards.isEmpty {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: columns), spacing: 16) {
+                            ForEach(cards) { event in
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack {
+                                        Text(event.league).tracking(1.2)
+                                        Spacer()
+                                        Text([EventStatus.live, .halftime].contains(event.status) ? "LIVE" : event.status == .finished ? "FINAL" : "UPCOMING")
+                                            .foregroundStyle([EventStatus.live, .halftime].contains(event.status) ? RallyTheme.liveRed : RallyTheme.textSecondary)
+                                    }.font(RallyFont.font(size: 10, weight: .semibold))
+                                    HStack(spacing: 12) {
+                                        RallyTeamLogo(team: event.awayTeam, size: 32)
+                                        Text([EventStatus.live, .halftime].contains(event.status) || event.status == .finished
+                                             ? "\(event.scoreAway.map(String.init) ?? "—") — \(event.scoreHome.map(String.init) ?? "—")"
+                                             : event.startTime.formatted(date: .omitted, time: .shortened))
+                                            .font(RallyFont.font(size: 20, weight: .semibold)).monospacedDigit()
+                                            .frame(maxWidth: .infinity)
+                                        RallyTeamLogo(team: event.homeTeam, size: 32)
+                                    }
+                                    Text(event.rallyMatchup).font(RallyFont.font(size: 13, weight: .medium))
+                                        .lineLimit(2).frame(height: 34, alignment: .top)
+                                }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
                             }
                         }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                }
-                .padding(.horizontal, 60)
-                Text("Move to wake · scores keep updating underneath")
-                    .font(.system(size: 12)).foregroundStyle(RallyTheme.textTertiary)
-            }
-        }
+                    Text("Move the pointer or press a key to return")
+                        .font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textTertiary)
+                }.padding(.horizontal, inset).frame(maxWidth: min(1320, geo.size.width))
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
+            }.frame(width: geo.size.width, height: geo.size.height).clipped()
+        }.accessibilityLabel("Rally ambient scores")
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 }

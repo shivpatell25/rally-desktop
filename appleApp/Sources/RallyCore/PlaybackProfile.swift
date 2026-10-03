@@ -61,12 +61,11 @@ public struct PlaybackTuning: Sendable, Equatable {
 /// everything else to libVLC (odd transports and codecs).
 public enum PlaybackRoute {
     public static func usesAVPlayer(headers: [String: String], url: URL) -> Bool {
-        let needsHeaders = headers.keys.contains {
-            $0.lowercased() == "cookie" || $0.lowercased() == "authorization"
-        }
-        let isHls = url.pathExtension.lowercased() == "m3u8"
+        let ext = url.pathExtension.lowercased()
+        // Native HLS and ordinary files. DASH and transport streams retain VLC.
+        return ["m3u8", "mp4", "mov", "m4v", "mp3", "m4a"].contains(ext)
             || url.absoluteString.lowercased().contains(".m3u8")
-        return needsHeaders && isHls
+            || (ext.isEmpty && ["http", "https"].contains(url.scheme?.lowercased() ?? ""))
     }
 }
 

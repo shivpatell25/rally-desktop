@@ -13,6 +13,7 @@ public enum EventStatus: String, Codable, Sendable {
 public enum IptvProvider: String, Codable, Sendable {
     case stalker = "STALKER"
     case xtream = "XTREAM"
+    case m3u = "M3U"
 }
 
 public struct Team: Codable, Sendable, Equatable, Identifiable {
@@ -25,6 +26,19 @@ public struct Team: Codable, Sendable, Equatable, Identifiable {
     public init(id: String, name: String, abbreviation: String, logoUrl: String? = nil, colors: [String] = [], records: [TeamRecord] = []) {
         self.id = id; self.name = name; self.abbreviation = abbreviation
         self.logoUrl = logoUrl; self.colors = colors; self.records = records
+    }
+}
+
+public extension Team {
+    /// ESPN includes overall, home/road, and conference records. A bare list of
+    /// their values looks like one malformed record, so compact cards use the
+    /// overall line and leave the named splits to dedicated stats surfaces.
+    var primaryRecordSummary: String? {
+        let overall = records.first {
+            let name = $0.name?.lowercased() ?? ""
+            return name == "overall" || name == "total"
+        }
+        return overall?.summary ?? records.compactMap(\.summary).first
     }
 }
 
@@ -172,6 +186,7 @@ public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
     public var scoreAway: Int?
     public var sport: String
     public var league: String
+    public var venueImageUrl: String?
     public var bannerUrl: String?
     public var venue: String?
     public var gameStatusDetail: String?
@@ -179,11 +194,11 @@ public struct SportEvent: Codable, Sendable, Equatable, Identifiable {
     public init(id: String, name: String, homeTeam: Team? = nil, awayTeam: Team? = nil,
                 startTime: Date, status: EventStatus, scoreHome: Int? = nil, scoreAway: Int? = nil,
                 sport: String, league: String, bannerUrl: String? = nil, venue: String? = nil,
-                gameStatusDetail: String? = nil, broadcasts: [String] = []) {
+                gameStatusDetail: String? = nil, broadcasts: [String] = [], venueImageUrl: String? = nil) {
         self.id = id; self.name = name; self.homeTeam = homeTeam; self.awayTeam = awayTeam
         self.startTime = startTime; self.status = status; self.scoreHome = scoreHome; self.scoreAway = scoreAway
         self.sport = sport; self.league = league; self.bannerUrl = bannerUrl; self.venue = venue
-        self.gameStatusDetail = gameStatusDetail; self.broadcasts = broadcasts
+        self.gameStatusDetail = gameStatusDetail; self.broadcasts = broadcasts; self.venueImageUrl = venueImageUrl
     }
 }
 

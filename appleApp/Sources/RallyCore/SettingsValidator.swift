@@ -11,13 +11,17 @@ public enum SettingsValidator {
     public static func validate(provider: IptvProvider,
                                 portal: String, mac: String,
                                 server: String, user: String, pass: String,
-                                addons: [String]) -> String? {
+                                addons: [String], playlist: String = "") -> String? {
         let portalNorm = UrlNormalizer.normalizePortal(portal).trimmingCharacters(in: .whitespacesAndNewlines)
         let macTrimmed = mac.trimmingCharacters(in: .whitespacesAndNewlines)
         if provider == .stalker {
             if !portalNorm.isEmpty, !macTrimmed.isEmpty,
                macTrimmed.range(of: macPattern, options: .regularExpression) == nil {
                 return "That MAC address doesn't look right — use the XX:XX:XX:XX:XX:XX format from your provider."
+            }
+        } else if provider == .m3u {
+            if !playlist.isEmpty, !M3uClient.isSupportedSource(playlist) {
+                return "Enter an HTTP or HTTPS playlist URL, or choose a local M3U file."
             }
         } else {
             let serverNorm = UrlNormalizer.normalizeXtreamServer(server).trimmingCharacters(in: .whitespacesAndNewlines)

@@ -37,47 +37,42 @@ struct SettingsView: View {
     @State private var draftDevice = ""
     @State private var draftServer = ""
     @State private var draftUser = ""
+    @State private var draftPlaylist = ""
+    @State private var draftPlaylistName = ""
     @State private var draftPass = ""
     @State private var draftAddons: [String] = []
     @State private var draftsSynced = false
     @State private var configurationError: String?
     @State private var savedNote = false
 
-    private let sections = ["Sources", "Sports", "Teams", "Alerts", "Viewing", "Support"]
+    private let sections = ["Sources", "Addons", "Sports", "My Rally", "Alerts", "Viewing", "Support"]
     private let icons = ["antenna.radiowaves.left.and.right", "trophy", "star", "bell", "play.tv", "info.circle"]
 
     var body: some View {
-        HSplitView {
-            List(selection: $section) {
-                ForEach(sections.indices, id: \.self) { i in
-                    HStack(spacing: 10) {
-                        Label(sections[i], systemImage: icons[i])
-                            .font(.system(size: 14, weight: .semibold))
-                        Spacer()
-                        railBadge(i)
-                    }
-                    .tag(i)
-                }
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 20) {
+                if let logo = tvArt("rally_wordmark") { Image(nsImage: logo).resizable().scaledToFit().frame(width: 112, height: 38) }
+                Text("Settings").font(RallyFont.display(28))
+                Spacer()
             }
-            .frame(minWidth: 210, maxWidth: 250)
-            .background(RallyTheme.surfaceBase)
+            RallyTabs(items: sections.enumerated().map { ($0.element, $0.offset) }, selection: $section)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     switch section {
                     case 0: sourcesPanel
-                    case 1: sportsPanel
-                    case 2: teamsPanel
-                    case 3: alertsPanel
-                    case 4: viewingPanel
+                    case 1: addonsPanel
+                    case 2: sportsPanel
+                    case 3: teamsPanel
+                    case 4: alertsPanel
+                    case 5: viewingPanel
                     default: supportPanel
                     }
-                }
-                .padding(24)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 24)
             }
-            .frame(minWidth: 500)
         }
-        .background { AmbientBackground() }
-        .navigationTitle("Settings")
+        .padding(30).frame(minWidth: 740, minHeight: 540)
+        .background { AmbientBackground() }.foregroundStyle(RallyTheme.textPrimary)
+        .font(RallyFont.font(size: 14)).navigationTitle("Settings")
     }
 
     @ViewBuilder
@@ -87,17 +82,17 @@ struct SettingsView: View {
             if !(store.connectionStatus ?? "").isEmpty && store.connectionStatus != "Connected" {
                 Circle().fill(RallyTheme.liveRed).frame(width: 8, height: 8)
             } else if !store.channels.isEmpty {
-                Text("\(store.channels.count)").font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(RallyTheme.rallyLime)
+                Text("\(store.channels.count)").font(RallyFont.font(size: 11, weight: .bold))
+                    .foregroundStyle(RallyTheme.textPrimary)
             }
         case 2:
             if !settings.favoriteTeamProfiles.isEmpty {
-                Text("\(settings.favoriteTeamProfiles.count)").font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(RallyTheme.rallyCyan)
+                Text("\(settings.favoriteTeamProfiles.count)").font(RallyFont.font(size: 11, weight: .bold))
+                    .foregroundStyle(RallyTheme.textPrimary)
             }
         case 5:
             if store.update != nil {
-                Circle().fill(RallyTheme.rallyLime).frame(width: 8, height: 8)
+                Circle().fill(RallyTheme.textPrimary).frame(width: 8, height: 8)
             }
         default:
             EmptyView()
@@ -108,10 +103,12 @@ struct SettingsView: View {
 
     private var sourcesPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            panelTitle("SOURCES", "IPTV and addons")
+            panelTitle("SOURCES", "IPTV providers")
+            if let message = settings.credentialError { Text(message).font(.callout).foregroundStyle(RallyTheme.liveRed) }
             HStack(spacing: 12) {
                 providerCard(title: "Stalker / Ministra", desc: "Portal + MAC", provider: .stalker)
                 providerCard(title: "Xtream Codes", desc: "Server + login", provider: .xtream)
+                providerCard(title: "M3U Playlist", desc: "URL or file", provider: .m3u)
             }
             glassCard {
                 if draftProvider == .stalker {
@@ -119,6 +116,15 @@ struct SettingsView: View {
                     settingsField("MAC address", text: $draftMac, mono: true)
                     settingsField("Serial (optional)", text: $draftSerial)
                     settingsField("Device ID (optional)", text: $draftDevice)
+                } else if draftProvider == .m3u {
+                    settingsField("Playlist URL", text: $draftPlaylist)
+                    settingsField("Playlist name", text: $draftPlaylistName)
+                    Button("Choose playlist file…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = false
+                        panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let url = panel.url { draftPlaylist = url.absoluteString }
+                    }
                 } else {
                     settingsField("Server URL", text: $draftServer)
                     settingsField("Username", text: $draftUser)
@@ -126,7 +132,7 @@ struct SettingsView: View {
                         Text("Password").frame(width: 150, alignment: .leading)
                         SecureField("Required", text: $draftPass)
                     }
-                    .font(.system(size: 14))
+                    .font(RallyFont.font(size: 14))
                 }
             }
             glassCard {
@@ -135,11 +141,11 @@ struct SettingsView: View {
                     if savedNote {
                         statusPill("Saved", good: true)
                     } else if let error = configurationError {
-                        Text(error).font(.system(size: 12)).foregroundStyle(RallyTheme.liveRed)
+                        Text(error).font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.liveRed)
                             .lineLimit(2).frame(maxWidth: 420, alignment: .leading)
                     } else {
                         Text("Edits stay here until saved — nothing persists until validation passes.")
-                            .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
+                            .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textTertiary)
                             .frame(maxWidth: 420, alignment: .leading)
                     }
                 }
@@ -160,31 +166,39 @@ struct SettingsView: View {
                         statusPill(status, good: status == "Connected")
                     }
                     Spacer()
-                    Text("\(store.channels.count) channels").font(.system(size: 12))
+                    Text("\(store.channels.count) channels").font(RallyFont.font(size: 12))
                         .foregroundStyle(RallyTheme.textSecondary)
                 }
             }
+
+        }
+        .onAppear { if !draftsSynced { syncDrafts() } }
+    }
+
+    private var addonsPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            panelTitle("ADDONS", "Installed stream sources")
             glassCard {
-                Text("STREMIO ADDONS").font(.system(size: 11, weight: .bold)).tracking(1)
+                Text("STREMIO ADDONS").font(RallyFont.font(size: 11, weight: .bold)).tracking(1)
                     .foregroundStyle(RallyTheme.textSecondary)
                 ForEach(draftAddons, id: \.self) { url in
                     HStack(spacing: 10) {
-                        Image(systemName: "globe").font(.system(size: 16))
-                            .foregroundStyle(RallyTheme.rallyCyan)
+                        Image(systemName: "globe").font(RallyFont.font(size: 16))
+                            .foregroundStyle(RallyTheme.textPrimary)
                             .frame(width: 34, height: 34)
                             .background(Color.white.opacity(0.06))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(store.addonManifests[url]?.name ?? host(of: url))
-                                .font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                                .font(RallyFont.font(size: 13, weight: .semibold)).lineLimit(1)
                             Text(versionLine(for: url))
-                                .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
+                                .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                         }
                         Spacer()
                         if store.addonManifests[url] != nil {
-                            Circle().fill(RallyTheme.rallyLime).frame(width: 8, height: 8)
+                            Circle().fill(RallyTheme.textPrimary).frame(width: 8, height: 8)
                         }
-                        Button("Remove") { removeAddon(url) }.font(.system(size: 12))
+                        Button("Remove") { removeAddon(url) }.font(RallyFont.font(size: 12))
                     }
                     Divider().opacity(0.2)
                 }
@@ -203,14 +217,18 @@ struct SettingsView: View {
                     }
                 }
                 Text("HTTP portals work for legacy providers but can be intercepted — prefer HTTPS.")
-                    .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
+                    .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textTertiary)
             }
-        }
-        .onAppear { syncDrafts() }
+            tvButton("Save and Apply", primary: true) { saveDrafts() }
+            if let error = configurationError { Text(error).foregroundStyle(RallyTheme.liveRed) }
+            if savedNote { Text("Saved").foregroundStyle(RallyTheme.textPrimary) }
+        }.onAppear { if !draftsSynced { syncDrafts() } }
     }
 
     /// Copies saved settings into the drafts (fresh panel, or after save).
     private func syncDrafts() {
+        draftPlaylist = settings.m3uPlaylistUrl
+        draftPlaylistName = settings.m3uPlaylistName
         draftProvider = settings.iptvProvider
         draftPortal = settings.portalUrl
         draftMac = settings.macAddress
@@ -218,7 +236,7 @@ struct SettingsView: View {
         draftDevice = settings.deviceId
         draftServer = settings.xtreamServerUrl
         draftUser = settings.xtreamUsername
-        draftPass = settings.xtreamPassword
+        draftPass = settings.iptvProvider == .xtream ? settings.xtreamPassword : ""
         draftAddons = settings.stremioAddonUrls
         draftsSynced = true
         configurationError = nil
@@ -229,11 +247,13 @@ struct SettingsView: View {
     private func saveDrafts() {
         if let error = SettingsValidator.validate(provider: draftProvider, portal: draftPortal, mac: draftMac,
                                                   server: draftServer, user: draftUser, pass: draftPass,
-                                                  addons: draftAddons) {
+                                                  addons: draftAddons, playlist: draftPlaylist) {
             configurationError = error
             savedNote = false
             return
         }
+        settings.m3uPlaylistUrl = draftPlaylist
+        settings.m3uPlaylistName = draftPlaylistName
         settings.iptvProvider = draftProvider
         settings.portalUrl = draftPortal
         settings.macAddress = draftMac
@@ -241,7 +261,10 @@ struct SettingsView: View {
         settings.deviceId = draftDevice
         settings.xtreamServerUrl = draftServer
         settings.xtreamUsername = draftUser
-        settings.xtreamPassword = draftPass
+        if draftProvider == .xtream {
+            settings.xtreamPassword = draftPass
+            if let error = settings.credentialError { configurationError = error; savedNote = false; return }
+        }
         settings.stremioAddonUrls = draftAddons
         store.resetProviderSession()
         settings.setupComplete = true
@@ -253,36 +276,40 @@ struct SettingsView: View {
     private func providerCard(title: String, desc: String, provider: IptvProvider) -> some View {
         let selected = draftProvider == provider
         return Button {
+            if provider == .xtream && draftPass.isEmpty { draftPass = settings.xtreamPassword }
             draftProvider = provider
             configurationError = nil
             savedNote = false
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(title).font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                    Text(title).font(RallyFont.font(size: 14, weight: .bold)).foregroundStyle(.white)
                     Spacer()
                     if selected {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(RallyTheme.rallyLime)
+                            .foregroundStyle(RallyTheme.textPrimary)
                     }
                 }
-                Text(desc).font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                Text(desc).font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                 if selected {
                     if provider == .stalker {
                         Text(settings.portalUrl.isEmpty ? "Not configured" : settings.portalUrl)
-                            .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
+                            .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
+                    } else if provider == .m3u {
+                        Text(settings.m3uPlaylistUrl.isEmpty ? "Not configured" : (settings.m3uPlaylistName.isEmpty ? "Configured playlist" : settings.m3uPlaylistName))
+                            .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
                     } else {
                         Text(settings.xtreamServerUrl.isEmpty ? "Not configured" : settings.xtreamServerUrl)
-                            .font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
+                            .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
                     }
                 }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(selected ? Color.white.opacity(0.1) : Color.white.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .stroke(selected ? RallyTheme.rallyCyan : RallyTheme.glassBorder, lineWidth: selected ? 2 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(selected ? Color.white.opacity(0.55) : RallyTheme.glassBorder, lineWidth: 0.7))
         }
         .buttonStyle(.plain)
     }
@@ -308,32 +335,32 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             panelTitle("SPORTS", "Leagues and order")
             if settings.enabledLeagues.isEmpty {
-                Text("All leagues enabled").font(.system(size: 12))
+                Text("All leagues enabled").font(RallyFont.font(size: 12))
                     .foregroundStyle(RallyTheme.textSecondary)
             }
             glassCard {
                 ForEach(Array(settings.sportsOrder.enumerated()), id: \.element) { index, league in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(league).font(.system(size: 14, weight: .semibold))
+                            Text(league).font(RallyFont.font(size: 14, weight: .semibold))
                             Text(settings.favoriteSports.contains(league) ? "Favorite · \(settings.isLeagueEnabled(league) ? "Shown" : "Hidden")"
                                 : (settings.isLeagueEnabled(league) ? "Shown" : "Hidden"))
-                                .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                                .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary)
                         }
                         Spacer()
                         Button(settings.favoriteSports.contains(league) ? "★" : "☆") {
                             settings.toggleFavoriteSport(league)
-                        }.font(.system(size: 15)).buttonStyle(.plain)
+                        }.font(RallyFont.font(size: 15)).buttonStyle(.plain)
                         Toggle("", isOn: Binding(
                             get: { settings.isLeagueEnabled(league) },
                             set: { _ in settings.toggleLeague(league) }
                         )).labelsHidden().scaleEffect(0.85)
                         Button("↑") { settings.moveSportUp(league) }
-                            .disabled(index == 0).font(.system(size: 13)).buttonStyle(.plain)
+                            .disabled(index == 0).font(RallyFont.font(size: 13)).buttonStyle(.plain)
                             .foregroundStyle(index == 0 ? RallyTheme.textTertiary : RallyTheme.textPrimary)
                         Button("↓") { settings.moveSportDown(league) }
                             .disabled(index == settings.sportsOrder.count - 1)
-                            .font(.system(size: 13)).buttonStyle(.plain)
+                            .font(RallyFont.font(size: 13)).buttonStyle(.plain)
                             .foregroundStyle(index == settings.sportsOrder.count - 1 ? RallyTheme.textTertiary : RallyTheme.textPrimary)
                     }
                     Divider().opacity(0.2)
@@ -348,36 +375,36 @@ struct SettingsView: View {
             glassCard {
                 if settings.favoriteTeamProfiles.isEmpty {
                     Text("No favorites yet. Star teams from event rows to build Up Next.")
-                        .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary)
+                        .font(RallyFont.font(size: 13)).foregroundStyle(RallyTheme.textSecondary)
                 }
                 ForEach(settings.favoriteTeamProfiles) { team in
                     HStack(spacing: 10) {
                         if let logo = team.logoUrl, let link = URL(string: logo) {
                             AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
-                                Text(team.abbreviation).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                                Text(team.abbreviation).font(RallyFont.font(size: 10, weight: .bold)).foregroundStyle(.white)
                             }
                             .frame(width: 30, height: 30)
                         } else {
-                            Text(team.abbreviation).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                            Text(team.abbreviation).font(RallyFont.font(size: 10, weight: .bold)).foregroundStyle(.white)
                                 .frame(width: 30, height: 30)
                                 .background(Color.white.opacity(0.08))
                                 .clipShape(Circle())
                         }
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(team.name).font(.system(size: 14, weight: .semibold))
-                            Text(team.league).font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                            Text(team.name).font(RallyFont.font(size: 14, weight: .semibold))
+                            Text(team.league).font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary)
                         }
                         Spacer()
-                        Button("Remove") { _ = settings.toggleFavoriteTeam(team) }.font(.system(size: 12))
+                        Button("Remove") { _ = settings.toggleFavoriteTeam(team) }.font(RallyFont.font(size: 12))
                     }
                     Divider().opacity(0.2)
                 }
             }
             glassCard {
-                Text("ADD TEAMS").font(.system(size: 11, weight: .bold)).tracking(1)
+                Text("ADD TEAMS").font(RallyFont.font(size: 11, weight: .bold)).tracking(1)
                     .foregroundStyle(RallyTheme.textSecondary)
                 Text("Pick a league to browse its clubs. Tapping a starred team removes it.")
-                    .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                    .font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                 Picker("League", selection: $catalogLeague) {
                     ForEach(EspnClient.leagues.map(\.league), id: \.self) { league in
                         Text(league).tag(league)
@@ -398,13 +425,13 @@ struct SettingsView: View {
                             }
                             .frame(width: 30, height: 30)
                         }
-                        Text(team.name).font(.system(size: 14, weight: .semibold))
+                        Text(team.name).font(RallyFont.font(size: 14, weight: .semibold))
                         Spacer()
                         let fav = FavoriteTeam(id: team.id, league: catalogLeague, name: team.name,
                                                abbreviation: team.abbreviation, logoUrl: team.logoUrl)
                         Button(settings.isFavoriteTeam(id: team.id, league: catalogLeague) ? "★" : "☆") {
                             _ = settings.toggleFavoriteTeam(fav)
-                        }.font(.system(size: 16)).buttonStyle(.plain)
+                        }.font(RallyFont.font(size: 16)).buttonStyle(.plain)
                     }
                     Divider().opacity(0.2)
                 }
@@ -442,7 +469,7 @@ struct SettingsView: View {
             glassCard {
                 toggleRow("Low latency mode", "Closer to the live edge", $settings.lowLatencyMode)
                 Divider().opacity(0.2)
-                toggleRow("Audio normalization", "Even out loud broadcasts", $settings.audioNormalizationEnabled)
+                toggleRow("Audio normalization", "Even out loud compatibility broadcasts", $settings.audioNormalizationEnabled)
                 Divider().opacity(0.2)
                 toggleRow("Adaptive quality", "Adjust to your connection", $settings.adaptiveQualityEnabled)
                 Divider().opacity(0.2)
@@ -469,35 +496,35 @@ struct SettingsView: View {
                             .frame(width: 44, height: 44)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Rally for macOS").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                        Text("com.shiv.rally.macos").font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                        Text("Rally for macOS").font(RallyFont.font(size: 15, weight: .bold)).foregroundStyle(.white)
+                        Text("com.shiv.rally.macos").font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
                     if store.checkingUpdates {
                         ProgressView().scaleEffect(0.7)
-                        Text("Checking…").font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                        Text("Checking…").font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                     } else if let rel = store.update {
                         VStack(alignment: .trailing, spacing: 2) {
                             tvButton("Download v\(rel.tag)", primary: true) {
                                 if let url = URL(string: rel.assetUrl) { NSWorkspace.shared.open(url) }
                             }
-                            Text(formatBytes(rel.assetSize)).font(.system(size: 10))
+                            Text(formatBytes(rel.assetSize)).font(RallyFont.font(size: 10))
                                 .foregroundStyle(RallyTheme.textTertiary)
                         }
                         if !rel.notes.isEmpty {
-                            Text(String(rel.notes.prefix(180))).font(.system(size: 11))
+                            Text(String(rel.notes.prefix(180))).font(RallyFont.font(size: 11))
                                 .foregroundStyle(RallyTheme.textSecondary).lineLimit(3)
                                 .frame(maxWidth: 300, alignment: .trailing)
                         }
                     } else if let error = store.updateError {
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text(error).font(.system(size: 12)).foregroundStyle(RallyTheme.liveRed)
+                            Text(error).font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.liveRed)
                                 .frame(maxWidth: 300, alignment: .trailing)
                             tvButton("Retry") { Task { await store.checkUpdates(force: true) } }
                         }
                     } else {
                         if store.updateChecked {
-                            Text("You're up to date").font(.system(size: 12))
+                            Text("You're up to date").font(RallyFont.font(size: 12))
                                 .foregroundStyle(RallyTheme.textSecondary)
                         }
                         tvButton("Check for updates") { Task { await store.checkUpdates(force: true) } }
@@ -507,9 +534,9 @@ struct SettingsView: View {
             glassCard {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Automatic updates").font(.system(size: 14, weight: .semibold))
+                        Text("Automatic updates").font(RallyFont.font(size: 14, weight: .semibold))
                         Text("Sparkle feed — installs staged releases in-app")
-                            .font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                            .font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
                     tvButton("Check now", primary: true) { store.sparkle.checkForUpdates() }
@@ -517,11 +544,31 @@ struct SettingsView: View {
                 }
             }
             glassCard {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Sports data").font(RallyFont.font(size: 14, weight: .semibold))
+                        Text(store.sportsStatus)
+                            .font(RallyFont.font(size: 12))
+                            .foregroundStyle(store.sportsStatus.contains("unavailable")
+                                ? RallyTheme.liveRed : RallyTheme.textSecondary)
+                        if let refreshed = store.lastSportsRefresh {
+                            Text("Last checked \(refreshed.formatted(.relative(presentation: .named)))")
+                                .font(RallyFont.font(size: 11))
+                                .foregroundStyle(RallyTheme.textTertiary)
+                        }
+                    }
+                    Spacer()
+                    if store.isLoading { ProgressView().scaleEffect(0.7) }
+                    tvButton("Refresh now") { Task { await store.refresh() } }
+                        .disabled(store.isLoading)
+                }
+            }
+            glassCard {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Credentials on this Mac").font(.system(size: 14, weight: .semibold))
+                        Text("Credentials on this Mac").font(RallyFont.font(size: 14, weight: .semibold))
                         Text("Portal, server, MAC, and tokens — favorites and prefs survive")
-                            .font(.system(size: 11))
+                            .font(RallyFont.font(size: 11))
                             .foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
@@ -530,17 +577,17 @@ struct SettingsView: View {
             }
             glassCard {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("PERSONALIZATION").font(.system(size: 11, weight: .bold)).tracking(1)
+                    Text("PERSONALIZATION").font(RallyFont.font(size: 11, weight: .bold)).tracking(1)
                         .foregroundStyle(RallyTheme.textSecondary)
                     Text("Leagues, favorites, alerts, playback, and access — never credentials or addons.")
-                        .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                        .font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
                     HStack(spacing: 10) {
                         tvButton("Export…") { exportingBackup = true }
                         tvButton("Import…") { importingBackup = true }
                         tvButton("Copy support report") { copySupportReport() }
                     }
                     if let backupMessage {
-                        Text(backupMessage).font(.system(size: 12))
+                        Text(backupMessage).font(RallyFont.font(size: 12))
                             .foregroundStyle(RallyTheme.textSecondary)
                     }
                 }
@@ -575,6 +622,7 @@ struct SettingsView: View {
             "Rally for macOS \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")",
             "Provider: \(s.iptvProvider) configured=\(!s.portalUrl.isEmpty || !s.xtreamServerUrl.isEmpty)",
             "Events: \(store.events.count) · Channels: \(store.channels.count) · Addons: \(s.stremioAddonUrls.count)",
+            "Sports: \(store.sportsStatus) lastRefresh=\(store.lastSportsRefresh?.ISO8601Format() ?? "never")",
             "Leagues: \(s.sportsOrder.joined(separator: ","))",
             "Favorites: \(s.favoriteTeamProfiles.count) teams",
             "Alerts: live=\(s.liveGameAlertsEnabled) redzone=\(s.redZoneAlertsEnabled)",
@@ -591,25 +639,20 @@ struct SettingsView: View {
 
     private func panelTitle(_ title: String, _ subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.system(size: 15, weight: .bold)).tracking(1.6).foregroundStyle(.white)
-            Text(subtitle).font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+            Text(title).font(RallyFont.font(size: 15, weight: .bold)).tracking(1.6).foregroundStyle(.white)
+            Text(subtitle).font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
         }
     }
 
     private func glassCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10, content: content)
-            .padding(18)
+            .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(LinearGradient(colors: [Color(red: 23/255, green: 36/255, blue: 55/255, opacity: 0.72),
-                                                Color(red: 7/255, green: 13/255, blue: 22/255, opacity: 0.56)],
-                                       startPoint: .top, endPoint: .bottom))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(RallyTheme.glassBorder, lineWidth: 1))
     }
 
     private func tvButton(_ label: String, primary: Bool = false, destructive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label).font(.system(size: 14, weight: .semibold))
+            Text(label).font(RallyFont.font(size: 14, weight: .semibold))
                 .foregroundStyle(destructive ? RallyTheme.liveRed : primary ? Color.black : RallyTheme.textPrimary)
                 .padding(.horizontal, 20).padding(.vertical, 9)
                 .background(destructive ? Color.white.opacity(0.06) : primary ? RallyTheme.offWhite : Color.white.opacity(0.08))
@@ -622,24 +665,24 @@ struct SettingsView: View {
     private func toggleRow(_ title: String, _ subtitle: String, _ binding: Binding<Bool>) -> some View {
         Toggle(isOn: binding) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 14))
-                Text(subtitle).font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+                Text(title).font(RallyFont.font(size: 14))
+                Text(subtitle).font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary)
             }
         }
     }
 
     private func settingsField(_ label: String, text: Binding<String>, mono: Bool = false) -> some View {
         HStack {
-            Text(label).font(.system(size: 14)).frame(width: 150, alignment: .leading)
-            TextField("Required", text: text)
+            Text(label).font(RallyFont.font(size: 14)).frame(width: 150, alignment: .leading)
+            TextField(label.contains("optional") ? "Optional" : "Required", text: text)
                 .textFieldStyle(.roundedBorder)
                 .font(mono ? .body.monospaced() : .body)
         }
     }
 
     private func statusPill(_ text: String, good: Bool) -> some View {
-        Text(text).font(.system(size: 11, weight: .bold))
-            .foregroundStyle(good ? RallyTheme.rallyLime : RallyTheme.liveRed)
+        Text(text).font(RallyFont.font(size: 11, weight: .bold))
+            .foregroundStyle(good ? RallyTheme.textPrimary : RallyTheme.liveRed)
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(Color.white.opacity(0.08))
             .clipShape(Capsule())

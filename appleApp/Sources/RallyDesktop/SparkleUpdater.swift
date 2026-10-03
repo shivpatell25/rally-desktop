@@ -12,12 +12,18 @@ public final class SparkleUpdater: ObservableObject {
     private let controller: SPUStandardUpdaterController
 
     public init() {
-        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        // SwiftPM debug executables have no app bundle Info.plist or Sparkle
+        // feed metadata. Starting Sparkle there presents a misleading modal.
+        let isPackagedApp = Bundle.main.bundleURL.pathExtension == "app"
+        controller = SPUStandardUpdaterController(startingUpdater: isPackagedApp,
+                                                  updaterDelegate: nil,
+                                                  userDriverDelegate: nil)
     }
 
     public var canCheckForUpdates: Bool { controller.updater.canCheckForUpdates }
 
     public func checkForUpdates() {
+        guard controller.updater.canCheckForUpdates else { return }
         controller.checkForUpdates(nil)
     }
 }

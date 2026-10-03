@@ -1,27 +1,27 @@
 
 <img src="Rally_Brand_Kit/02_Wordmark/rally_wordmark_color_transparent_1024.png" alt="Rally wordmark" width="320">
 
-Rally for macOS and Windows. A sports hub that combines ESPN schedules and live data with the user's Stalker/Ministra or Xtream IPTV subscription and configured Stremio addons, then presents matching streams in a cinematic interface. Same product on both desktops: TV-identical home, event detail, league center, game view, and Multi-View.
+Rally for macOS and Windows. A sports hub that combines ESPN schedules and live data with the user's Stalker/Ministra, Xtream, or M3U IPTV source and configured Stremio addons, then presents matching streams in a cinematic interface. The macOS app combines Rally’s visual identity with native toolbar navigation, menus, settings, AVKit playback, and responsive desktop layouts.
 
 The Android TV implementation is retained under `app/` as the reference platform (`upstream` remote).
 
 ## Features
 
 - Live and upcoming NFL, NCAAF, NBA, NCAAB, MLB, NHL, soccer, and college events
-- TV-identical home dashboard, event detail, league center, highlights, and game view
+- Rally home dashboard, event detail, league center, highlights, and game view
 - Automatic matching between events and IPTV channels with evidence-based quality labels
-- Stalker/Ministra and Xtream Codes IPTV provider support
+- Stalker/Ministra, Xtream Codes, and M3U IPTV provider support
 - Stremio addon stream discovery with header allowlisting and source switching
 - Full-screen playback, in-app updates, and up to four-stream Multi-View
-- ESPN highlight clips and per-game leaders, team stats, and stat tables
+- ESPN highlight clips, venue/weather/editorial metadata, player headshots, leaders, team comparisons, and formatted stat tables
 - Searchable live-TV channel browser with Now/Next EPG
 - Local caching for channels, manifests, streams, and sports data
-- Keyboard/mouse-first on desktop (arrow-key D-pad walk, drag-to-page shelves, space pauses)
+- Keyboard/trackpad/mouse-first on desktop (arrow-key D-pad walk, two-finger or drag shelf paging, space pauses)
 
 ## Layout
 
 - `appleApp/` — macOS SwiftUI app (SwiftPM: `RallyCore` library, `RallyDesktop` app, `SelfTest`, `RallyDesktopTests`)
-- `windowsApp/` — Windows solution (`Rally.sln`: `Rally.Core` net8.0 library, `Rally.App` WinUI 3 app, `Rally.Tests` xunit)
+- `windowsApp/` — Windows solution (`Rally.sln`: `Rally.Core` net8.0 library, `Rally.App` WinUI 3 app, `Rally.Tests` xUnit)
 - `app/` — Android TV reference implementation
 - `Rally_Brand_Kit/` — wordmarks, marks, backdrops, brand tokens
 
@@ -29,7 +29,7 @@ The Android TV implementation is retained under `app/` as the reference platform
 
 Bundle ID `com.shiv.rally.macos`, macOS 13+.
 
-Requirements: full Xcode (26 SDK for Liquid Glass; CLT-only builds the core but not tests or signing), SwiftPM (no extra installs — VLCKit and Sparkle 2 resolve via SPM).
+Requirements: full Xcode (macOS SDK; CLT-only builds the core but not tests or signing), SwiftPM (no extra installs — VLCKit and Sparkle 2 resolve via SPM).
 
 ```shell
 cd appleApp
@@ -38,12 +38,12 @@ swift test           # unit suite (quality, matcher, providers, updates, summary
 swift run SelfTest   # dependency-free assert pass
 ```
 
-Debug deep links for verification: `--tv=leagues|live|highlights|myteams`, `--league=NFL`, `--event=<id|first>`, `--play=<id|first>`, `--team=<league:id>`, `--game`, `--settings`, `--skip-onboarding`. Notifications and browsers can also open `rally://event/<id>` and `rally://team/<league:id>`.
+Debug deep links for verification: `--tv=home|live|schedule|leagues|highlights|myteams`, `--league=NFL`, `--event=<id|first>`, `--play=<id|first>`, `--team=<league:id>`, `--game`, `--settings`, `--skip-onboarding`. Add `--visual-fixture` for stable local sports data and `--window=compact|standard|wide` for deterministic responsive captures. Notifications and browsers can also open `rally://event/<id>` and `rally://team/<league:id>`.
 
 Unsigned dev package (signed/notarized DMG needs a Team ID):
 
 ```shell
-./packaging/package.sh 0.4.0   # dist/RallyDesktop.app + dist/*.dmg
+./packaging/package.sh 0.7.1   # dist-native/Rally.app + development DMG
 ```
 
 In-app updates check `appleApp/appcast.xml` via Sparkle 2 (`SparkleUpdater`), with the GitHub Releases API as fallback (`UpdateChecker`). The Sparkle public key is staged at `appleApp/sparkle_public_key.txt`; the private seed stays out of git (`~/.config/rally-macos/sparkle_private_key`). First signed DMG release adds the enclosure + `edSignature` to the appcast.

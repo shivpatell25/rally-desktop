@@ -33,3 +33,7 @@ bin/
 obj/
 
 .build/
+
+appleApp/dist-native/
+
+appleApp/dist-parity/

@@ -1,30 +1,58 @@
 import RallyCore
 import SwiftUI
 
-/// Single scaling spine for all TV surfaces. Anchored at 1512pt (dev width):
-/// layout at 1512 is pixel-identical to today; smaller/larger windows scale
-/// geometry proportionally instead of stretching spacers.
+/// Responsive geometry shared by every full-window TV surface.
+/// Rally composition proportions stay consistent while rails expose more cards.
 struct TvMetrics {
+    enum Layout {
+        case compact
+        case standard
+        case wide
+    }
+
     var width: CGFloat
+    var height: CGFloat = 900
+    var largeText = false
+    private var typeScale: CGFloat { largeText ? 1.2 : 1 }
 
-    /// Geometry scale, clamped so type and touch targets stay usable.
-    var scale: CGFloat { min(1.25, max(0.72, width / 1512)) }
+    var layout: Layout {
+        if width < 1180 { return .compact }
+        if width >= 1680 { return .wide }
+        return .standard
+    }
 
-    /// Scale a TV pt constant.
+    /// Legacy geometry scale for media surfaces. Type and chrome use named
+    /// metrics below and therefore stay stable while the window resizes.
+    var scale: CGFloat { min(1.15, max(0.78, width / 1512)) }
     func s(_ base: CGFloat) -> CGFloat { base * scale }
 
-    var hPad: CGFloat { s(34) }
-    var cardSpacing: CGFloat { 14 }
-    var heroHeight: CGFloat { s(300) }
-    var detailHeroHeight: CGFloat { s(300) }
-    var liveCard: CGSize { CGSize(width: s(300), height: s(170)) }
+    var hPad: CGFloat { min(100, max(32, width * 0.06)) }
+    var contentMaxWidth: CGFloat { 1720 }
+    var contentWidth: CGFloat { min(width - hPad * 2, contentMaxWidth) }
+    var cardSpacing: CGFloat { layout == .compact ? 12 : 16 }
+    var sectionSpacing: CGFloat { layout == .compact ? 26 : 32 }
+    var pageTopPadding: CGFloat { layout == .compact ? 16 : 22 }
+    var toolbarHeight: CGFloat { layout == .compact ? 82 : 96 }
+    var wordmarkWidth: CGFloat { layout == .compact ? 184 : (layout == .wide ? 252 : 220) }
+    var navItemWidth: CGFloat { layout == .compact ? 64 : 76 }
+    var navHorizontalPadding: CGFloat { layout == .compact ? 10 : 16 }
+    var toolbarActionSize: CGFloat { layout == .compact ? 44 : 48 }
+    var eyebrowSize: CGFloat { (layout == .compact ? 10 : 11) * typeScale }
+    var pageTitleSize: CGFloat { (layout == .compact ? 26 : 30) * typeScale }
+    var sectionTitleSize: CGFloat { (layout == .compact ? 20 : 23) * typeScale }
+    var cardTitleSize: CGFloat { (layout == .compact ? 16 : 18) * typeScale }
+    var bodySize: CGFloat { (layout == .compact ? 13 : 14) * typeScale }
+
+    var heroHeight: CGFloat { min(340, max(230, (height - 90) * 0.35)) }
+    var detailHeroHeight: CGFloat { heroHeight }
+    var mediaWidth: CGFloat { max(200, (contentWidth - cardSpacing * 2) / 3) }
+    var liveCard: CGSize { CGSize(width: mediaWidth, height: mediaWidth / 2.65) }
     var sportCard: CGSize { CGSize(width: s(200), height: s(150)) }
     var portraitCard: CGSize { CGSize(width: s(250), height: s(375)) }
     var panelMinHeight: CGFloat { s(220) }
 
-    /// Exact-fit card width so N cards fill the viewport (Phase 3 paging).
     func pageCardWidth(count: Int, aspect: CGFloat) -> (width: CGFloat, height: CGFloat) {
-        let w = (width - hPad * 2 - cardSpacing * CGFloat(count - 1)) / CGFloat(count)
+        let w = (contentWidth - cardSpacing * CGFloat(count - 1)) / CGFloat(count)
         return (w, w / aspect)
     }
 
@@ -61,7 +89,7 @@ extension EnvironmentValues {
 extension View {
     /// Focus ring honoring high-contrast (3pt + brighter cyan).
     func rallyFocusRing(active: Bool, radius: CGFloat = 10,
-                        activeColor: Color = RallyTheme.rallyCyan,
+                        activeColor: Color = .white.opacity(0.65),
                         inactiveColor: Color = RallyTheme.glassBorder) -> some View {
         modifier(RallyFocusRing(active: active, radius: radius,
                                 activeColor: activeColor, inactiveColor: inactiveColor))

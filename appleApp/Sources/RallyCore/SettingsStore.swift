@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import LocalAuthentication
 
 /// 1:1 port of `PortalUrlNormalizer` — one source of truth for user-entered URLs.
 public enum UrlNormalizer {
@@ -94,6 +95,38 @@ public final class SettingsStore: ObservableObject {
 
     @Published public var iptvProvider: IptvProvider {
         didSet { defaults.set(iptvProvider.rawValue, forKey: "iptv_provider") }
+    }
+    @Published public var m3uPlaylistUrl: String {
+        didSet { defaults.set(m3uPlaylistUrl, forKey: "m3u_playlist_url") }
+    }
+    @Published public var m3uPlaylistName: String {
+        didSet { defaults.set(m3uPlaylistName, forKey: "m3u_playlist_name") }
+    }
+    @Published public var savedEventIds: Set<String> {
+        didSet { defaults.set(Array(savedEventIds), forKey: "saved_event_ids") }
+    }
+    @Published public var savedEvents: [SportEvent] {
+        didSet { defaults.set(try? JSONEncoder().encode(savedEvents), forKey: "saved_events_snapshot") }
+    }
+    @Published public var favoritePlayerIds: Set<String> {
+        didSet { defaults.set(Array(favoritePlayerIds), forKey: "favorite_player_ids") }
+    }
+    @Published public var recentLeagues: [String] {
+        didSet { defaults.set(recentLeagues, forKey: "recent_leagues") }
+    }
+    @discardableResult public func toggleSavedEvent(_ event: SportEvent) -> Bool {
+        if savedEventIds.contains(event.id) {
+            savedEventIds.remove(event.id)
+            savedEvents.removeAll { $0.id == event.id }
+            return false
+        }
+        savedEventIds.insert(event.id)
+        savedEvents.removeAll { $0.id == event.id }
+        savedEvents.append(event)
+        return true
+    }
+    public func recordViewedLeague(_ league: String) {
+        recentLeagues = Array(([league] + recentLeagues.filter { $0 != league }).prefix(8))
     }
     @Published public var portalUrl: String {
         didSet {
@@ -189,19 +222,25 @@ public final class SettingsStore: ObservableObject {
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         iptvProvider = IptvProvider(rawValue: defaults.string(forKey: "iptv_provider") ?? "") ?? .stalker
+        m3uPlaylistUrl = defaults.string(forKey: "m3u_playlist_url") ?? ""
+        m3uPlaylistName = defaults.string(forKey: "m3u_playlist_name") ?? ""
+        savedEventIds = Set(defaults.stringArray(forKey: "saved_event_ids") ?? [])
+        savedEvents = defaults.data(forKey: "saved_events_snapshot").flatMap { try? JSONDecoder().decode([SportEvent].self, from: $0) } ?? []
+        favoritePlayerIds = Set(defaults.stringArray(forKey: "favorite_player_ids") ?? [])
+        recentLeagues = defaults.stringArray(forKey: "recent_leagues") ?? []
         portalUrl = defaults.string(forKey: "portal_url") ?? ""
         xtreamServerUrl = defaults.string(forKey: "xtream_server_url") ?? ""
         xtreamUsername = defaults.string(forKey: "xtream_username") ?? ""
         serialNumber = defaults.string(forKey: "serial_number") ?? ""
         deviceId = defaults.string(forKey: "device_id") ?? ""
         if let data = defaults.data(forKey: "stremio_addon_urls_json"),
-           let list = try? JSONDecoder().decode([String].self, from: data), !list.isEmpty {
+           let list = try? JSONDecoder().decode([String].self, from: data) {
             stremioAddonUrls = list
         } else if let legacy = defaults.string(forKey: "stremio_addon_url")?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !legacy.isEmpty, let norm = UrlNormalizer.normalizeAddon(legacy) {
             stremioAddonUrls = [norm]
         } else {
-            stremioAddonUrls = [Self.defaultAddon]
+            stremioAddonUrls = []
         }
         enabledLeagues = Set(defaults.stringArray(forKey: "enabled_leagues") ?? [])
         favoriteSports = Set(defaults.stringArray(forKey: "favorite_sports") ?? [])
@@ -237,6 +276,7 @@ public final class SettingsStore: ObservableObject {
         get { keychainGet("xtream_password") ?? "" }
         set { keychainSet(newValue, account: "xtream_password"); objectWillChange.send() }
     }
+    @Published public private(set) var credentialError: String?
     public var authToken: String {
         get { keychainGet("auth_token") ?? "" }
         set { keychainSet(newValue, account: "auth_token"); objectWillChange.send() }
@@ -253,14 +293,12 @@ public final class SettingsStore: ObservableObject {
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "mac_address"); objectWillChange.send() }
     }
 
-    public var hasCredentials: Bool { setupComplete || !portalUrl.isEmpty || !stremioAddonUrls.isEmpty }
+    public var hasCredentials: Bool { setupComplete || !portalUrl.isEmpty || !xtreamServerUrl.isEmpty || !m3uPlaylistUrl.isEmpty || !stremioAddonUrls.isEmpty }
 
-    /// Credentials the user actually entered. The bundled default addon is
-    /// excluded: a fresh install must hit onboarding (Android ships no default
-    /// addon at all and contacts nothing until configured).
+    /// Credentials the user actually entered. A fresh install has no default addon.
     public var hasUserCredentials: Bool {
-        setupComplete || !portalUrl.isEmpty || !xtreamServerUrl.isEmpty || !xtreamUsername.isEmpty
-            || stremioAddonUrls.contains { $0.lowercased() != Self.defaultAddon.lowercased() }
+        setupComplete || !m3uPlaylistUrl.isEmpty || !portalUrl.isEmpty || !xtreamServerUrl.isEmpty || !xtreamUsername.isEmpty
+            || !stremioAddonUrls.isEmpty
     }
 
     /// First-run gate (Android `startDest`): onboarding until setup is saved
@@ -319,9 +357,10 @@ public final class SettingsStore: ObservableObject {
     /// wiped every UserDefaults key with no undo).
     public func clearCredentials() {
         for key in ["portal_url", "xtream_server_url", "xtream_username", "mac_address",
-                    "serial_number", "device_id", "channel_cache_identity"] {
+                    "serial_number", "device_id", "channel_cache_identity", "m3u_playlist_url", "m3u_playlist_name"] {
             defaults.removeObject(forKey: key)
         }
+        m3uPlaylistUrl = ""; m3uPlaylistName = ""
         portalUrl = ""; xtreamServerUrl = ""; xtreamUsername = ""
         serialNumber = ""; deviceId = ""; channelCacheIdentity = ""
         keychainDelete("auth_token"); keychainDelete("xtream_password")
@@ -366,6 +405,9 @@ public final class SettingsStore: ObservableObject {
     // MARK: - Portable personalization (Android preferences backup, no secrets)
 
     public struct Personalization: Codable, Sendable {
+        public var savedEventIds: [String]?
+        public var favoritePlayerIds: [String]?
+        public var recentLeagues: [String]?
         public var sportsOrder: [String]
         public var enabledLeagues: [String]
         public var favoriteSports: [String]
@@ -385,6 +427,7 @@ public final class SettingsStore: ObservableObject {
 
     public func exportPersonalization() -> Data? {
         try? JSONEncoder().encode(Personalization(
+            savedEventIds: Array(savedEventIds), favoritePlayerIds: Array(favoritePlayerIds), recentLeagues: recentLeagues,
             sportsOrder: sportsOrder, enabledLeagues: Array(enabledLeagues),
             favoriteSports: Array(favoriteSports), favoriteTeams: Array(favoriteTeams),
             favoriteTeamProfiles: favoriteTeamProfiles,
@@ -399,6 +442,9 @@ public final class SettingsStore: ObservableObject {
     @discardableResult
     public func importPersonalization(_ data: Data) -> Bool {
         guard let p = try? JSONDecoder().decode(Personalization.self, from: data) else { return false }
+        if let saved = p.savedEventIds { savedEventIds = Set(saved) }
+        if let players = p.favoritePlayerIds { favoritePlayerIds = Set(players) }
+        if let recent = p.recentLeagues { recentLeagues = recent }
         sportsOrder = p.sportsOrder.isEmpty ? Self.defaultSportsOrder : p.sportsOrder
         enabledLeagues = Set(p.enabledLeagues)
         favoriteSports = Set(p.favoriteSports)
@@ -419,24 +465,35 @@ public final class SettingsStore: ObservableObject {
 
     // MARK: - Keychain
     private func keychainGet(_ account: String) -> String? {
+        let context = LAContext(); context.interactionNotAllowed = true
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService, kSecAttrAccount as String: account,
-            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context]
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
+            credentialError = "The saved credential is locked in Keychain. Unlock it for Rally or enter it again in Sources."
+        }
+        guard status == errSecSuccess,
               let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
     private func keychainSet(_ value: String, account: String) {
+        let context = LAContext(); context.interactionNotAllowed = true
         let data = Data(value.utf8)
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService, kSecAttrAccount as String: account]
-        if SecItemCopyMatching(q as CFDictionary, nil) == errSecSuccess {
-            SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        } else {
+            kSecAttrService as String: Self.keychainService, kSecAttrAccount as String: account,
+            kSecUseAuthenticationContext as String: context]
+        let status: OSStatus
+        let found = SecItemCopyMatching(q as CFDictionary, nil)
+        if found == errSecSuccess {
+            status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        } else if found == errSecItemNotFound {
             var add = q; add[kSecValueData as String] = data
-            SecItemAdd(add as CFDictionary, nil)
-        }
+            status = SecItemAdd(add as CFDictionary, nil)
+        } else { status = found }
+        credentialError = status == errSecSuccess ? nil : "Rally could not save the credential in Keychain. Unlock your login Keychain and try again."
     }
     private func keychainDelete(_ account: String) {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,

@@ -11,10 +11,15 @@ private struct EspnEvent: Decodable {
     var competitions: [EspnCompetition]?
 }
 private struct EspnCompetition: Decodable {
+    var date: String?
     var status: EspnStatus?
     var competitors: [EspnCompetitor]?
     var broadcasts: [EspnBroadcast]?
     var venue: EspnVenue?
+    var notes: [EspnNote]?
+}
+private struct EspnNote: Decodable {
+    var headline: String?
 }
 private struct EspnStatus: Decodable {
     var type: EspnStatusType?
@@ -42,18 +47,50 @@ private struct EspnTeam: Decodable {
     var displayName: String?
     var abbreviation: String?
     var logo: String?
+    var logos: [EspnImage]?
+    var color: String?
+    var alternateColor: String?
 }
 private struct EspnBroadcast: Decodable {
     var names: [String]?
 }
 private struct EspnVenue: Decodable {
+    var images: [EspnImage]?
     var fullName: String?
+}
+private struct EspnImage: Decodable {
+    var href: String?
+}
+private struct EspnGameInfo: Decodable {
+    var venue: EspnDetailVenue?
+    var weather: EspnWeather?
+}
+private struct EspnDetailVenue: Decodable {
+    var fullName: String?
+    var address: EspnAddress?
+    var images: [EspnImage]?
+}
+private struct EspnAddress: Decodable {
+    var city: String?
+    var state: String?
+    var country: String?
+}
+private struct EspnWeather: Decodable {
+    var temperature: Double?
+    var gust: Double?
+    var precipitation: Double?
+}
+private struct EspnArticle: Decodable {
+    var headline: String?
+    var description: String?
 }
 private struct EspnSummaryResponse: Decodable {
     var leaders: [EspnLeaderGroup]?
     var videos: [EspnVideo]?
     var boxscore: EspnBoxscore?
     var predictor: EspnPredictor?
+    var gameInfo: EspnGameInfo?
+    var article: EspnArticle?
 }
 private struct EspnPredictor: Decodable {
     var homeWinPercentage: EspnPct?
@@ -121,8 +158,28 @@ private struct EspnHeadshot: Decodable {
 private struct EspnPosition: Decodable {
     var abbreviation: String?
 }
+private enum EspnStringValue: Decodable {
+    case string(String)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(Int64.self) {
+            self = .string(String(value))
+        } else {
+            throw DecodingError.typeMismatch(
+                String.self,
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected string or integer"))
+        }
+    }
+
+    var value: String {
+        switch self { case .string(let value): value }
+    }
+}
 private struct EspnVideo: Decodable {
-    var id: Int64?
+    var id: EspnStringValue?
     var headline: String?
     var description: String?
     var duration: Int?
@@ -158,6 +215,7 @@ private struct EspnBoxscore: Decodable {
 private struct EspnBoxscoreTeam: Decodable {
     var team: EspnTeam?
     var statistics: [EspnStatistic]?
+    var homeAway: String?
 }
 
 private struct EspnStatistic: Decodable {
@@ -205,15 +263,79 @@ public final class EspnClient: Sendable {
         self.decoder = JSONDecoder()
     }
 
-    public func fetchAllLeagues(limit: Int = 100) async -> [SportEvent] {
-        await withTaskGroup(of: [SportEvent].self) { group in
-            for entry in Self.leagues {
-                group.addTask { (try? await self.fetchScoreboard(sport: entry.sport, league: entry.path, domainLeague: entry.league, limit: limit)) ?? [] }
+    public struct SportsFeed {
+        public var events: [SportEvent]
+        public var successfulLeagues: Set<String>
+    }
+    public func fetchAllLeagues(limit: Int = 200, enabled: Set<String> = []) async -> [SportEvent] {
+        await fetchSportsFeed(limit: limit, enabled: enabled).events
+    }
+    public func fetchSportsFeed(limit: Int = 200, enabled: Set<String> = []) async -> SportsFeed {
+        let entries = Self.leagues.filter { enabled.isEmpty || enabled.contains($0.league) }
+        var all: [SportEvent] = [], successful = Set<String>()
+        // Android bounds scoreboard concurrency to three and preserves failed leagues.
+        for offset in stride(from: 0, to: entries.count, by: 3) {
+            let batch = entries[offset..<min(entries.count, offset + 3)]
+            await withTaskGroup(of: (String, [SportEvent]?).self) { group in
+                for entry in batch {
+                    group.addTask {
+                        let formatter = DateFormatter(); formatter.dateFormat = "yyyyMMdd"
+                        let dates = ["NFL", "NCAAF"].contains(entry.league) ? nil : formatter.string(from: Date())
+                        guard var events = try? await self.fetchScoreboard(sport: entry.sport, league: entry.path, domainLeague: entry.league, limit: limit, dates: dates) else { return (entry.league, nil) }
+                        if events.isEmpty && dates != nil {
+                            formatter.dateFormat = "yyyyMM"
+                            let months = Set([formatter.string(from: Date()), formatter.string(from: Date().addingTimeInterval(7 * 86400))])
+                            for month in months {
+                                events += (try? await self.fetchScoreboard(sport: entry.sport, league: entry.path, domainLeague: entry.league, limit: 1000, dates: month)) ?? []
+                            }
+                        }
+                        return (entry.league, events)
+                    }
+                }
+                for await (league, events) in group {
+                    if let events { successful.insert(league); all += events }
+                }
             }
-            var out: [SportEvent] = []
-            for await events in group { out.append(contentsOf: events) }
-            return out.sorted { $0.startTime < $1.startTime }
         }
+        var seen = Set<String>()
+        return SportsFeed(events: all.filter { seen.insert($0.id).inserted }.sorted { $0.startTime < $1.startTime }, successfulLeagues: successful)
+    }
+
+    public func fetchScheduleWindow(now: Date = Date()) async -> [SportEvent] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let formatter = DateFormatter()
+        formatter.calendar = calendar; formatter.timeZone = calendar.timeZone; formatter.dateFormat = "yyyyMMdd"
+        let start = calendar.date(byAdding: .day, value: -1, to: now)!
+        let end = calendar.date(byAdding: .day, value: 7, to: now)!
+        formatter.dateFormat = "yyyyMM"
+        let months = Set([formatter.string(from: start), formatter.string(from: end)]).sorted()
+        var all: [SportEvent] = []
+        // ESPN rejects date-range queries on this endpoint. Match Android's monthly fallback,
+        // then select the local desktop week without launching a request for every day.
+        for offset in stride(from: 0, to: Self.leagues.count, by: 3) {
+            let batch = Self.leagues[offset..<min(Self.leagues.count, offset + 3)]
+            let result = await withTaskGroup(of: [SportEvent].self) { group in
+                for entry in batch {
+                    group.addTask {
+                        var events: [SportEvent] = []
+                        for month in months {
+                            events += (try? await self.fetchScoreboard(sport: entry.sport, league: entry.path, domainLeague: entry.league, limit: 1000, dates: month)) ?? []
+                        }
+                        return events
+                    }
+                }
+                var result: [SportEvent] = []
+                for await events in group { result += events }
+                return result
+            }
+            all += result
+        }
+        let firstDay = calendar.startOfDay(for: start)
+        let lastDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end))!
+        var seen = Set<String>()
+        return all.filter { $0.startTime >= firstDay && $0.startTime < lastDay && seen.insert($0.id).inserted }
+            .sorted { $0.startTime < $1.startTime }
     }
 
     public func fetchScoreboard(sport: String, league: String, domainLeague: String, limit: Int = 100, dates: String? = nil) async throws -> [SportEvent] {
@@ -224,7 +346,10 @@ public final class EspnClient: Sendable {
         guard let url = comps.url else { return [] }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue("Rally/macOS", forHTTPHeaderField: "User-Agent")
-        let (data, _) = try await session.data(for: req)
+        let (data, response) = try await session.data(for: req)
+        if let response = response as? HTTPURLResponse, !(200..<300).contains(response.statusCode) {
+            throw URLError(.badServerResponse)
+        }
         let board = try decoder.decode(EspnScoreboard.self, from: data)
         return (board.events ?? []).map { mapEvent($0, domainLeague: domainLeague, sport: sport) }
     }
@@ -235,29 +360,92 @@ public final class EspnClient: Sendable {
         let away = comp?.competitors?.first { $0.homeAway == "away" }
         func team(_ c: EspnCompetitor?) -> Team? {
             guard let t = c?.team else { return nil }
+            let colors = [t.color, t.alternateColor].compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value.hasPrefix("#") ? value : "#\(value)"
+            }
             return Team(id: t.id ?? UUID().uuidString, name: t.displayName ?? t.name ?? "?",
-                        abbreviation: t.abbreviation ?? "?", logoUrl: t.logo,
+                        abbreviation: t.abbreviation ?? "?", logoUrl: t.logo ?? t.logos?.first?.href,
+                        colors: colors,
                         records: (c?.records ?? []).map { TeamRecord(name: $0.name, summary: $0.summary) })
         }
-        let state = comp?.status?.type?.state?.lowercased() ?? ""
-        let name = comp?.status?.type?.name?.lowercased() ?? ""
-        let completed = comp?.status?.type?.completed ?? false
-        let status: EventStatus = if completed || state == "post" { .finished }
-            else if name.contains("half") { .halftime }
-            else if state == "in" { .live }
-            else if state == "pre" { .notStarted }
-            else { .notStarted }
-        let start = e.date.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
-        let detail = comp?.status?.type?.shortDetail ?? comp?.status?.type?.detail
-        let broadcasts = Array(Set((comp?.broadcasts ?? []).flatMap { $0.names ?? [] }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }))
+        let statusType = comp?.status?.type
+        let state = statusType?.state?.lowercased() ?? ""
+        let name = statusType?.name?.lowercased() ?? ""
+        let description = [name, statusType?.detail?.lowercased() ?? ""].joined(separator: " ")
+        let completed = statusType?.completed ?? false
+        let status: EventStatus = if description.contains("cancel") {
+            .canceled
+        } else if description.contains("delay") || description.contains("postpone") {
+            .delayed
+        } else if name.contains("half") {
+            .halftime
+        } else if completed || state == "post" {
+            .finished
+        } else if state == "in" {
+            .live
+        } else {
+            .notStarted
+        }
+        let dateText = comp?.date ?? e.date
+        let start = dateText.flatMap(Self.parseDate) ?? Date()
+        let note = comp?.notes?.compactMap(\.headline).first { !$0.isEmpty }
+        let detail: String? = switch status {
+        case .live, .halftime:
+            statusType?.shortDetail ?? statusType?.detail
+        case .delayed, .canceled:
+            statusType?.detail ?? statusType?.shortDetail
+        case .notStarted:
+            note
+        case .finished:
+            statusType?.detail ?? statusType?.shortDetail
+        }
+        var seenBroadcasts = Set<String>()
+        let broadcasts = (comp?.broadcasts ?? []).flatMap { $0.names ?? [] }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seenBroadcasts.insert($0.lowercased()).inserted }
+        func score(_ value: String?) -> Int? {
+            value.flatMap(Double.init).map { Int($0.rounded(.towardZero)) }
+        }
         return SportEvent(id: e.id, name: e.name ?? e.shortName ?? "Game",
             homeTeam: team(home), awayTeam: team(away), startTime: start, status: status,
-            scoreHome: home?.score.flatMap(Int.init), scoreAway: away?.score.flatMap(Int.init),
+            scoreHome: score(home?.score), scoreAway: score(away?.score),
             sport: sport, league: domainLeague, venue: comp?.venue?.fullName, gameStatusDetail: detail,
-            broadcasts: broadcasts)
+            broadcasts: broadcasts, venueImageUrl: comp?.venue?.images?.first?.href)
+    }
+
+    private static let isoDateWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let isoDate: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static func parseDate(_ value: String) -> Date? {
+        if let date = isoDateWithFractionalSeconds.date(from: value) ?? isoDate.date(from: value) {
+            return date
+        }
+        // Scoreboards commonly omit seconds (`2026-09-29T00:15Z`), which
+        // Foundation's internet-date option does not accept.
+        guard value.count > 16 else { return nil }
+        let secondsPosition = value.index(value.startIndex, offsetBy: 16)
+        guard value[secondsPosition] == "Z" || value[secondsPosition] == "+" || value[secondsPosition] == "-" else {
+            return nil
+        }
+        var normalized = value
+        normalized.insert(contentsOf: ":00", at: secondsPosition)
+        return isoDate.date(from: normalized)
     }
     public struct GameDetail: Sendable {
+        public var event: SportEvent?
+        public var plays: [GamePlay]
+        public var liveContext: [String: String]
+        public var isAvailable: Bool
         public var leaders: [PlayerLeader]
         public var clips: [HighlightClip]
         public var playerTables: [PlayerStatTable]
@@ -265,6 +453,32 @@ public final class EspnClient: Sendable {
         /// ESPN matchup predictor, when published (0-100). Rendered only if present.
         public var homeWinPct: Double?
         public var awayWinPct: Double?
+        public var venueName: String?
+        public var venueLocation: String?
+        public var venueImageUrl: String?
+        public var weatherSummary: String?
+        public var headline: String?
+        public var summary: String?
+
+        public init(leaders: [PlayerLeader], clips: [HighlightClip], playerTables: [PlayerStatTable],
+                    teamStats: [TeamStatComparison], homeWinPct: Double? = nil, awayWinPct: Double? = nil,
+                    venueName: String? = nil, venueLocation: String? = nil, venueImageUrl: String? = nil,
+                    weatherSummary: String? = nil, headline: String? = nil, summary: String? = nil, plays: [GamePlay] = [], liveContext: [String: String] = [:], isAvailable: Bool = true, event: SportEvent? = nil) {
+            self.event = event
+            self.plays = plays; self.liveContext = liveContext; self.isAvailable = isAvailable
+            self.leaders = leaders
+            self.clips = clips
+            self.playerTables = playerTables
+            self.teamStats = teamStats
+            self.homeWinPct = homeWinPct
+            self.awayWinPct = awayWinPct
+            self.venueName = venueName
+            self.venueLocation = venueLocation
+            self.venueImageUrl = venueImageUrl
+            self.weatherSummary = weatherSummary
+            self.headline = headline
+            self.summary = summary
+        }
     }
 
     /// Per-game summary: leaders + highlight videos. Mirrors the
@@ -272,12 +486,13 @@ public final class EspnClient: Sendable {
     public func fetchSummary(sport: String, league: String, eventId: String, awayAbbr: String? = nil, homeAbbr: String? = nil) async -> GameDetail {
         var comps = URLComponents(string: "\(Self.baseURL)sports/\(sport)/\(league)/summary")!
         comps.queryItems = [URLQueryItem(name: "event", value: eventId)]
-        guard let url = comps.url else { return GameDetail(leaders: [], clips: [], playerTables: [], teamStats: []) }
+        guard let url = comps.url else { return GameDetail(leaders: [], clips: [], playerTables: [], teamStats: [], isAvailable: false) }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("Rally/macOS", forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await session.data(for: req),
+        guard let (data, response) = try? await session.data(for: req),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let summary = try? decoder.decode(EspnSummaryResponse.self, from: data) else {
-            return GameDetail(leaders: [], clips: [], playerTables: [], teamStats: [])
+            return GameDetail(leaders: [], clips: [], playerTables: [], teamStats: [], isAvailable: false)
         }
         var leaders: [PlayerLeader] = []
         for group in summary.leaders ?? [] {
@@ -301,7 +516,7 @@ public final class EspnClient: Sendable {
                 ?? video.links?.source?.HD?.href
                 ?? video.links?.source?.href
                 ?? video.links?.mobile?.source?.href
-            let id = video.id.map(String.init) ?? title
+            let id = video.id?.value ?? title
             guard seen.insert(id).inserted else { return nil }
             return HighlightClip(id: id, title: title,
                 description: video.description?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -336,6 +551,12 @@ public final class EspnClient: Sendable {
             }
             var awayStats = stats(for: awayAbbr)
             var homeStats = stats(for: homeAbbr)
+            if awayStats.isEmpty {
+                awayStats = teams.first(where: { $0.homeAway == "away" })?.statistics ?? []
+            }
+            if homeStats.isEmpty {
+                homeStats = teams.first(where: { $0.homeAway == "home" })?.statistics ?? []
+            }
             if awayStats.isEmpty || homeStats.isEmpty {
                 awayStats = teams.first?.statistics ?? []
                 homeStats = teams.dropFirst().first?.statistics ?? []
@@ -368,8 +589,39 @@ public final class EspnClient: Sendable {
             ?? predictor?.awayTeam?.winProbability?.value
             ?? predictor?.away?.winPercent?.value
             ?? predictor?.away?.chanceToWin?.value
+        let venue = summary.gameInfo?.venue
+        let address = venue?.address
+        let venueLocation = [address?.city, address?.state ?? address?.country]
+            .compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ", ")
+        let weatherSummary: String? = {
+            guard let weather = summary.gameInfo?.weather else { return nil }
+            var parts: [String] = []
+            if let temperature = weather.temperature {
+                parts.append("\(Int(temperature.rounded()))°F")
+            }
+            if let gust = weather.gust, gust > 0 {
+                parts.append("gusts \(Int(gust.rounded())) mph")
+            }
+            if let precipitation = weather.precipitation, precipitation > 0 {
+                parts.append("\(Int(precipitation.rounded()))% precip.")
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }()
+        let context = GameContext.parse(data)
+        // Summary headers keep saved games current after they leave the feed window.
+        var event: SportEvent?
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let header = root["header"],
+           let headerData = try? JSONSerialization.data(withJSONObject: header), let snapshot = try? decoder.decode(EspnEvent.self, from: headerData) {
+            let domainLeague = Self.leagues.first { $0.path == league && $0.sport == sport }?.league ?? league
+            event = mapEvent(snapshot, domainLeague: domainLeague, sport: sport)
+            event?.venueImageUrl = venue?.images?.first?.href
+            if let fullName = venue?.fullName { event?.venue = fullName }
+        }
         return GameDetail(leaders: leaders, clips: clips, playerTables: playerTables, teamStats: teamStats,
-                          homeWinPct: homeWinPct, awayWinPct: awayWinPct)
+                          homeWinPct: homeWinPct, awayWinPct: awayWinPct,
+                          venueName: venue?.fullName, venueLocation: venueLocation.isEmpty ? nil : venueLocation,
+                          venueImageUrl: venue?.images?.first?.href, weatherSummary: weatherSummary,
+                          headline: summary.article?.headline, summary: summary.article?.description, plays: context.plays, liveContext: context.context, event: event)
     }
     public static func path(forLeague domainLeague: String) -> (sport: String, path: String)? {
         leagues.first(where: { $0.league == domainLeague }).map { ($0.sport, $0.path) }

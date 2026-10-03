@@ -41,7 +41,7 @@ final class OnboardingTests: XCTestCase {
         // Fresh install: only the bundled default addon -> onboarding required.
         XCTAssertTrue(store.needsOnboarding)
         XCTAssertFalse(store.hasUserCredentials)
-        XCTAssertTrue(store.hasCredentials) // legacy flag still sees the default addon
+        XCTAssertFalse(store.hasCredentials) // source discovery is opt-in
         store.portalUrl = "example.to:8080/c"
         XCTAssertFalse(store.needsOnboarding)
         XCTAssertTrue(store.hasUserCredentials)

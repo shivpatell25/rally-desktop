@@ -1,3 +1,4 @@
+import AppKit
 import RallyCore
 import SwiftUI
 
@@ -21,7 +22,7 @@ struct PagedShelf<Item, Content: View>: View {
     private var visibleIds: [String] { Array(items.dropFirst(safePage * pageSize).prefix(pageSize)).map(idFor) }
     private func item(for id: String) -> Item? { items.first(where: { idFor($0) == id }) }
     private var cardSize: CGSize {
-        let viewport = m.width - m.hPad * 2
+        let viewport = m.contentWidth
         let w = (viewport - m.cardSpacing * CGFloat(pageSize - 1)) / CGFloat(pageSize)
         return CGSize(width: w, height: w / aspect)
     }
@@ -30,20 +31,20 @@ struct PagedShelf<Item, Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             if let title {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(title).font(.system(size: 15, weight: .bold)).tracking(2.4)
+                    Text(title).font(RallyFont.font(size: 15, weight: .bold)).tracking(2.4)
                         .foregroundStyle(RallyTheme.textPrimary)
                     Spacer()
                     if pageCount > 1 {
                         HStack(spacing: 8) {
                             Button("‹") { turn(-1) }.buttonStyle(.plain)
-                                .font(.system(size: 16, weight: .bold))
+                                .font(RallyFont.font(size: 16, weight: .bold))
                                 .foregroundStyle(safePage > 0 ? RallyTheme.textPrimary : RallyTheme.textTertiary)
                                 .disabled(safePage == 0)
                             Text("\(safePage + 1)/\(pageCount)")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(RallyFont.font(size: 11, weight: .semibold))
                                 .foregroundStyle(RallyTheme.textSecondary)
                             Button("›") { turn(1) }.buttonStyle(.plain)
-                                .font(.system(size: 16, weight: .bold))
+                                .font(RallyFont.font(size: 16, weight: .bold))
                                 .foregroundStyle(safePage < pageCount - 1 ? RallyTheme.textPrimary : RallyTheme.textTertiary)
                                 .disabled(safePage == pageCount - 1)
                         }
@@ -64,9 +65,11 @@ struct PagedShelf<Item, Content: View>: View {
                     Spacer(minLength: 0)
                 }
             }
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .rallyAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: page)
             .contentShape(Rectangle())
+            .background(TrackpadPagingView { turn($0) })
             .gesture(DragGesture(minimumDistance: 20).onEnded { drag in
                 if drag.translation.width < -60 {
                     turn(1)
@@ -108,6 +111,86 @@ struct PagedShelf<Item, Content: View>: View {
             turn(delta)
         } else {
             focus.wrappedValue = ids[next]
+        }
+    }
+}
+
+/// SwiftUI's drag gesture requires a pressed click on macOS. This monitor turns
+/// a horizontal two-finger scroll over the shelf into one page turn per gesture
+/// without intercepting card clicks or the containing vertical scroll view.
+private struct TrackpadPagingView: NSViewRepresentable {
+    let turn: (Int) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(turn: turn)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.observedView = view
+        context.coordinator.startMonitoring()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.turn = turn
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stopMonitoring()
+    }
+
+    final class Coordinator {
+        weak var observedView: NSView?
+        var turn: (Int) -> Void
+        private var monitor: Any?
+        private var accumulatedX: CGFloat = 0
+        private var didTurn = false
+
+        init(turn: @escaping (Int) -> Void) {
+            self.turn = turn
+        }
+
+        func startMonitoring() {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let view = self.observedView, event.window === view.window else {
+                    return event
+                }
+                let point = view.convert(event.locationInWindow, from: nil)
+                guard view.bounds.contains(point),
+                      abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else {
+                    return event
+                }
+
+                if event.phase == .began {
+                    self.accumulatedX = 0
+                    self.didTurn = false
+                }
+                let directionMultiplier: CGFloat = event.isDirectionInvertedFromDevice ? -1 : 1
+                self.accumulatedX += event.scrollingDeltaX * directionMultiplier
+
+                if !self.didTurn, abs(self.accumulatedX) >= 42 {
+                    self.didTurn = true
+                    self.turn(self.accumulatedX < 0 ? 1 : -1)
+                }
+                if event.phase == .ended || event.phase == .cancelled ||
+                    event.momentumPhase == .ended {
+                    self.accumulatedX = 0
+                    self.didTurn = false
+                }
+                return nil
+            }
+        }
+
+        func stopMonitoring() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            stopMonitoring()
         }
     }
 }

@@ -19,4 +19,18 @@ The keystore itself must also be kept in a separate encrypted backup. Every upda
 4. Upload the locally verified signed APK, or manually run the signed-release workflow for that tag after configuring the repository secrets.
 5. Verify the APK signature and SHA-256 digest before announcing the release.
 
+## macOS releases
+
+The macOS 0.7.1 release includes the completed native port and AFK stabilization.
+Run `swift test` in `appleApp/`, then `./packaging/package.sh 0.7.1`.
+Verify the app signature and disk image, sign the exact DMG with the existing
+Sparkle Ed25519 key, and publish its enclosure/signature in `appleApp/appcast.xml`.
+Publish the DMG and checksum in `shivpatell25/rally-desktop`; keep Windows work
+separate until its own validation/release is requested.
+
+The current package has an ad-hoc development signature and is not notarized.
+The Sparkle signing key authenticates updates; it is not an Apple Developer ID
+certificate. It remains local and is not stored in GitHub secrets. Android
+signing secrets are configured only in the Rally TV repository.
+
 Never commit a keystore, password, provider credential, local properties file, or APK.

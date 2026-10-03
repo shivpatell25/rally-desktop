@@ -7,10 +7,10 @@ import VLCKit
 struct VLCVideoView: NSViewRepresentable {
     var onReady: (NSView) -> Void
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = RallyVideoHost()
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.black.cgColor
-        DispatchQueue.main.async { onReady(view) }
+        DispatchQueue.main.async { onReady(view.surface) }
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
@@ -34,6 +34,9 @@ final class PlayerState: ObservableObject {
     @Published var isPlaying = false
     @Published var paused = false
     @Published var muted = false
+    @Published var plays: [GamePlay] = []
+    @Published var liveContext: [String: String] = [:]
+    @Published var activeEvent: SportEvent?
     @Published var leaders: [PlayerLeader] = []
     @Published var clips: [HighlightClip] = []
     @Published var tables: [PlayerStatTable] = []
@@ -48,20 +51,33 @@ final class PlayerState: ObservableObject {
     @Published var stallCount = 0
     @Published var adaptiveReason: String?
     @Published var profileName = "Standard"
-    /// Dedicated clip player: highlights play on their own engine slot so the
-    /// live session underneath is never torn down (Android CurrentHighlightsChrome).
+    /// Highlights use a separate native player while the live session continues.
     @Published var clipOverlay: HighlightClip?
-    let clipEngine = VlcEngine()
-    let clipHost = NSView()
-    private let clipSlotId = UUID().uuidString
     /// AVPlayer route for header-gated HLS (Cookie/Authorization libVLC
     /// cannot inject). Own host view; the VLC drawable is never shared.
     let avController = PlaybackController()
-    let avHost = NSView()
+    @Published var canSeek = false
+    @Published var audioTracks: [PlaybackTrack] = []
+    @Published var captionTracks: [PlaybackTrack] = []
+    @Published var qualities: [PlaybackQuality] = []
+    @Published var qualityLabel = "Auto"
+    @Published var buffering = false
+    @Published var volume: Double = 1
     @Published var avActive = false
     let engine = VlcEngine()
+    let mediaSession = MediaPlaybackSession()
     private let slotId = UUID().uuidString
+    private var transportURL: URL?
+    private var transportHeaders: [String: String] = [:]
     private var startedAt = Date()
+    private var sessionRevision = 0
+    private var requestGeneration = UUID()
+    private var progress = PlaybackProgress()
+    private var recovering = false
+    private var sleepActivity: NSObjectProtocol?
+    private var detailTask: Task<Void, Never>?
+    let clipController = PlaybackController()
+    private var primaryMuteBeforeClip = false
     /// Candidates that already failed this session (Android blacklist).
     private var failedTargets: Set<String> = []
 
@@ -72,16 +88,31 @@ final class PlayerState: ObservableObject {
         NSLog("%@", stamped)
     }
 
-    func load(event: SportEvent?, channel: IptvChannel?, store: RallyStore, drawable: NSView) async {
+    func load(event: SportEvent?, channel: IptvChannel?, store: RallyStore, drawable: NSView, source: PlayCandidate? = nil) async {
+        sessionRevision += 1
+        requestGeneration = UUID()
+        progress.reset()
+        engine.stop(slotId: slotId); avController.stop()
+        let revision = sessionRevision
+        detailTask?.cancel()
+        plays = []; liveContext = [:]; leaders = []; clips = []; tables = []; teamStats = []
+        activeEvent = event
         isLoading = true
         error = nil
+        isPlaying = false
+        paused = false
+        primary = nil
+        defer { if revision == sessionRevision { isLoading = false } }
+        if source == nil { await store.ensureChannels() }
+        guard !Task.isCancelled, revision == sessionRevision else { return }
         candidateNote = [:]
         failedTargets.removeAll()
         recoveryAttempts = 0
         stallCount = 0
         adaptiveReason = nil
         var cands: [PlayCandidate] = []
-        if let event {
+        if let source { cands = [source] }
+        else if let event {
             let addons = store.settings.stremioAddonUrls
             log("event=\(event.id) addons=\(addons.count) channels=\(store.channels.count)")
             let options = await withTaskGroup(of: [StremioStreamOption].self) { group in
@@ -93,6 +124,7 @@ final class PlayerState: ObservableObject {
                 return out
             }
             log("stremio options=\(options.count) (playable=\(options.filter { $0.isDirectPlayable }.count))")
+            guard !Task.isCancelled, revision == sessionRevision else { return }
             cands = StreamResolver.candidates(event: event, channels: store.channels, stremioOptions: options)
         } else if let channel {
             log("direct channel=\(channel.id)")
@@ -101,10 +133,15 @@ final class PlayerState: ObservableObject {
         candidates = cands
         log("candidates=\(cands.count) stremio=\(cands.filter { $0.kind == .stremio }.count) iptv=\(cands.filter { $0.kind == .iptv }.count)")
         await preflightTopCandidates(store: store)
+        guard !Task.isCancelled, revision == sessionRevision else { return }
         if let event, let path = EspnClient.path(forLeague: event.league) {
             detailLoading = true
-            Task {
+            detailTask = Task {
                 let detail = await store.espnClient.fetchSummary(sport: path.sport, league: path.path, eventId: event.id, awayAbbr: event.awayTeam?.abbreviation, homeAbbr: event.homeTeam?.abbreviation)
+                guard !Task.isCancelled, revision == sessionRevision else { return }
+                if let current = detail.event { activeEvent = current }
+                plays = detail.plays
+                liveContext = detail.liveContext
                 leaders = detail.leaders
                 clips = detail.clips
                 tables = detail.playerTables
@@ -148,12 +185,14 @@ final class PlayerState: ObservableObject {
     }
     /// Explicit single attempt (user-picked source): no auto-walk.
     func switchTo(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
+        requestGeneration = UUID(); progress.reset(); failedTargets.remove(candidate.id)
         error = nil
         _ = await attempt(candidate, store: store, drawable: drawable)
     }
 
     /// Plays an ESPN highlight clip as a one-off Stremio-kind candidate.
     func playClip(_ clip: HighlightClip, store: RallyStore, drawable: NSView) async {
+        requestGeneration = UUID(); progress.reset()
         guard let url = clip.streamUrl, !url.isEmpty else {
             error = "Highlight has no playable stream"
             return
@@ -170,25 +209,24 @@ final class PlayerState: ObservableObject {
             candidateNote[clip.id] = "Highlight has no playable stream"
             return
         }
-        _ = clipEngine.reserve(slotId: clipSlotId)
-        do {
-            clipEngine.stop(slotId: clipSlotId)
-            try clipEngine.play(slotId: clipSlotId, title: clip.title, url: url, drawable: clipHost)
-            clipOverlay = clip
-            log("clip overlay playing \(clip.title)")
-        } catch {
-            candidateNote[clip.id] = "Clip failed: \(error.localizedDescription)"
-            log("clip overlay failed: \(error.localizedDescription)")
-        }
+        primaryMuteBeforeClip = muted
+        avController.player.isMuted = true
+        engine.setMuted(slotId: slotId, muted: true)
+        clipController.play(url: url)
+        clipOverlay = clip
     }
 
     func closeClipOverlay() {
-        clipEngine.stop(slotId: clipSlotId)
+        clipController.stop()
+        avController.player.isMuted = primaryMuteBeforeClip
+        engine.setMuted(slotId: slotId, muted: primaryMuteBeforeClip)
+        muted = primaryMuteBeforeClip
         clipOverlay = nil
     }
 
     /// Restart replays the current source from scratch.
     func restart(store: RallyStore, drawable: NSView) async {
+        requestGeneration = UUID(); progress.reset()
         guard let p = primary else {
             await retry(store: store, drawable: drawable)
             return
@@ -199,17 +237,12 @@ final class PlayerState: ObservableObject {
         await play(p, store: store, drawable: drawable)
     }
 
-    /// Retry walks every candidate in rank order until one plays (v1 fallback chain).
+    /// A manual retry starts a fresh bounded source recovery pass.
     func retry(store: RallyStore, drawable: NSView) async {
-        error = nil
-        for cand in candidates {
-            if candidateNote[cand.id] == nil || cand.id == primary?.id {
-                await play(cand, store: store, drawable: drawable)
-                if isPlaying { return }
-            }
-        }
-        if !isPlaying, error == nil { error = "All sources failed" }
-        log("retry done playing=\(isPlaying)")
+        requestGeneration = UUID(); progress.reset()
+        failedTargets.removeAll(); candidateNote = [:]; error = nil
+        guard let candidate = primary ?? candidates.first else { error = "No playable sources found"; return }
+        await play(candidate, store: store, drawable: drawable)
     }
 
     /// Autoplay entry with bounded auto-recovery (Android
@@ -218,16 +251,19 @@ final class PlayerState: ObservableObject {
     private func play(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async {
         error = nil
         recoveryAttempts = 0
+        let intent = requestGeneration
         var next: PlayCandidate? = candidate
         var attempts = 0
-        while let cand = next, attempts < 3 {
+        while let cand = next, attempts < 3, !Task.isCancelled, intent == requestGeneration {
             attempts += 1
             if await attempt(cand, store: store, drawable: drawable) { return }
+            guard intent == requestGeneration, !Task.isCancelled else { return }
             recoveryAttempts += 1
             next = StreamResolver.sort(candidates.filter {
                 !failedTargets.contains($0.id) && $0.id != cand.id
             }) { store.settings.streamHealth(target: $0).score }.first
         }
+        guard intent == requestGeneration else { return }
         if !isPlaying, error == nil { error = "All sources failed" }
         log("autoplay done playing=\(isPlaying) attempts=\(attempts)")
     }
@@ -244,6 +280,12 @@ final class PlayerState: ObservableObject {
     /// Single engine attempt. Returns false on failure (blacklisted); the
     /// caller decides whether to walk on.
     private func attempt(_ candidate: PlayCandidate, store: RallyStore, drawable: NSView) async -> Bool {
+        let revision = sessionRevision, intent = requestGeneration
+        guard !Task.isCancelled else { return false }
+        isLoading = true; isPlaying = false; buffering = true
+        engine.stop(slotId: slotId); avController.stop()
+        let wasPaused = paused
+        defer { if intent == requestGeneration { isLoading = false } }
         error = nil
         candidateNote[candidate.id] = "Resolving…"
         var urlString = candidate.url
@@ -251,7 +293,7 @@ final class PlayerState: ObservableObject {
         if candidate.kind == .iptv, let ch = candidate.channel {
             if store.settings.iptvProvider == .stalker {
                 urlString = await store.stalkerClient.resolveStreamUrl(channelId: ch.id)
-            } else {
+            } else if store.settings.iptvProvider == .xtream {
                 urlString = await store.xtreamClient.resolveStreamUrl(channelId: ch.id)
             }
             if urlString != ch.id, urlString != ch.streamUrl {
@@ -260,6 +302,7 @@ final class PlayerState: ObservableObject {
                 }
             }
         }
+        guard !Task.isCancelled, revision == sessionRevision, intent == requestGeneration else { return false }
         guard let url = URL(string: urlString), let host = url.host else {
             candidateNote[candidate.id] = "Bad stream URL"
             error = "Bad stream URL"
@@ -270,32 +313,59 @@ final class PlayerState: ObservableObject {
         }
         log("try kind=\(candidate.kind) host=\(host) exact=\(candidate.exactMatch)")
         startedAt = Date()
-        let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers ?? channelHeaders(store, candidate))
+        qualities = []; qualityLabel = "Auto"
+        let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers ?? candidate.channel?.streamHeaders ?? channelHeaders(store, candidate))
+        transportURL = url; transportHeaders = safeHeaders
+        engine.stop(slotId: slotId)
+        avController.stop()
+        paused = false
         let isHlsRoute = PlaybackRoute.usesAVPlayer(headers: safeHeaders, url: url)
         if isHlsRoute {
-            // libVLC cannot inject Cookie/Authorization — AVPlayer sends the
-            // full header fields (Android ExoPlayer parity for authed HLS).
-            avController.attach(to: avHost)
-            avController.play(url: url, headers: safeHeaders)
+            avController.play(url: url, headers: safeHeaders, lowLatency: store.settings.lowLatencyMode)
             avActive = true
-            primary = candidate
-            isPlaying = true
-            stallCount = 0
-            candidateNote[candidate.id] = "Playing (AVPlayer)"
-            let ms = Int64(Date().timeIntervalSince(startedAt) * 1000)
-            store.settings.recordStreamSuccess(target: candidate.url, startupMs: ms)
-            log("playing via AVPlayer startupMs=\(ms)")
-            return true
+            buffering = true
+            let ready = await avController.waitUntilReady()
+            guard !Task.isCancelled, revision == sessionRevision, intent == requestGeneration else { return false }
+            if ready {
+                primary = candidate; isPlaying = true; stallCount = 0; buffering = false
+                avController.player.volume = Float(volume); avController.player.isMuted = muted
+                if wasPaused { avController.pause(); paused = true }
+                progress.reset(keepBudget: true)
+                candidateNote[candidate.id] = "Playing (AVKit)"
+                store.settings.recordStreamSuccess(target: candidate.url, startupMs: Int64(Date().timeIntervalSince(startedAt) * 1000))
+                return true
+            }
+            avController.stop()
+            // Try the same transport with VLC before rejecting this source.
+            log("AVKit rejected stream; trying compatibility playback")
         }
         avActive = false
         do {
             _ = engine.reserve(slotId: slotId)
             let (_, tuning) = tuning(for: store)
-            try engine.play(slotId: slotId, title: candidate.title, url: url,
+            let playable = try await engine.prepareURL(slotId: slotId, url: url, headers: safeHeaders)
+            guard !Task.isCancelled, revision == sessionRevision, intent == requestGeneration else { return false }
+            try engine.play(slotId: slotId, title: candidate.title, url: playable,
                             headers: safeHeaders.isEmpty ? nil : safeHeaders,
                             tuning: tuning, drawable: drawable)
+            let deadline = Date().addingTimeInterval(12)
+            while (!engine.isPlaying(slotId: slotId) || engine.isBuffering(slotId: slotId)) && !engine.hasError(slotId: slotId) && Date() < deadline && !Task.isCancelled && intent == requestGeneration {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard revision == sessionRevision, intent == requestGeneration else { return false }
+            guard engine.isPlaying(slotId: slotId), !Task.isCancelled else {
+                throw NSError(domain: "Rally.Playback", code: 1, userInfo: [NSLocalizedDescriptionKey: "The source did not start playback."])
+            }
             primary = candidate
+            Task {
+                let options = await PlaybackController.loadQualities(url: url, headers: safeHeaders)
+                if primary?.id == candidate.id && revision == sessionRevision && intent == requestGeneration { qualities = options }
+            }
             isPlaying = true
+            buffering = false
+            engine.setVolume(slotId: slotId, value: volume); engine.setMuted(slotId: slotId, muted: muted)
+            if wasPaused { engine.pause(slotId: slotId); paused = true }
+            progress.reset(keepBudget: true)
             stallCount = 0
             candidateNote[candidate.id] = "Playing"
             let ms = Int64(Date().timeIntervalSince(startedAt) * 1000)
@@ -303,6 +373,9 @@ final class PlayerState: ObservableObject {
             log("playing startupMs=\(ms) profile=\(profileName) norm=\(store.settings.audioNormalizationEnabled)")
             return true
         } catch {
+            guard intent == requestGeneration, !Task.isCancelled else { return false }
+            isPlaying = false
+            buffering = false
             candidateNote[candidate.id] = "Failed: \(error.localizedDescription)"
             self.error = "Playback failed: \(error.localizedDescription)"
             store.settings.recordStreamFailure(target: candidate.url)
@@ -316,22 +389,28 @@ final class PlayerState: ObservableObject {
     /// playing counts a stall; with adaptive quality on, repeated stalls step
     /// down once with a reason instead of spinning forever.
     func watchdog(store: RallyStore, drawable: NSView) async {
-        guard isPlaying, !paused else { return }
-        let active = avActive ? avController.isPlaying : engine.isPlaying(slotId: slotId)
-        guard !active else { stallCount = 0; return }
+        guard primary != nil, (isPlaying || error == nil), !paused, !isLoading, !recovering else { return }
+        if avActive && avController.ended { isPlaying = false; return }
+        let seconds = avActive ? avController.player.currentTime().seconds : engine.elapsedSeconds(slotId: slotId)
+        let failed = avActive ? avController.error != nil : engine.hasError(slotId: slotId)
+        guard failed || progress.stalled(position: seconds, paused: paused) else { return }
+        guard let current = primary else { return }
+        recovering = true
+        defer { recovering = false }
         stallCount += 1
-        if let p = primary { store.settings.recordStreamStall(target: p.url) }
-        log("stall #\(stallCount)")
-        guard store.settings.adaptiveQualityEnabled, let p = primary else { return }
-        if let (next, reason) = AdaptivePolicy.fallback(afterStalls: stallCount, candidates: candidates,
-                                                        currentId: p.id, failedIds: failedTargets) {
-            adaptiveReason = reason
-            stallCount = 0
-            log(reason)
-            await play(next, store: store, drawable: drawable)
+        store.settings.recordStreamStall(target: current.url)
+        if progress.consumeReconnect() {
+            recoveryAttempts += 1
+            adaptiveReason = "Reconnecting a stalled broadcast"
+            _ = await attempt(current, store: store, drawable: drawable)
+        } else {
+            failedTargets.insert(current.id)
+            if let next = candidates.first(where: { !failedTargets.contains($0.id) }) {
+                adaptiveReason = "Trying another available source"
+                await play(next, store: store, drawable: drawable)
+            } else { error = "The broadcast stopped. Retry or pick another source."; isPlaying = false; buffering = false }
         }
     }
-
     private func channelHeaders(_ store: RallyStore, _ candidate: PlayCandidate) -> [String: String]? {
         guard candidate.kind == .iptv else { return nil }
         if store.settings.iptvProvider == .stalker {
@@ -356,15 +435,36 @@ final class PlayerState: ObservableObject {
             engine.pause(slotId: slotId)
             paused = true
         }
+        mediaSession.update(paused: paused, elapsed: avController.player.currentTime().seconds)
         log(paused ? "paused" : "resumed")
     }
 
+    func seek(_ fraction: Double) {
+        if avActive { avController.seek(fraction: fraction) } else { engine.seek(slotId: slotId, fraction: fraction) }
+    }
+    func seekRelative(_ seconds: Double) {
+        if avActive { avController.seekRelative(seconds) } else { engine.seekRelative(slotId: slotId, seconds: seconds) }
+    }
+    func fromStart() { if avActive { avController.watchFromStart() } else { seek(0) } }
+    func liveEdge() { if avActive { avController.goLive() } else { seek(1) } }
+    func selectTrack(_ id: Int, captions: Bool) {
+        if avActive { avController.selectTrack(id, captions: captions) }
+        else { engine.selectTrack(slotId: slotId, id: id, captions: captions) }
+        refreshStats()
+    }
+    func setVolume(_ value: Double) {
+        volume = value
+        if avActive { avController.player.volume = Float(value) } else { engine.setVolume(slotId: slotId, value: value) }
+    }
     func teardown() {
+        sessionRevision += 1; requestGeneration = UUID()
+        if let sleepActivity { ProcessInfo.processInfo.endActivity(sleepActivity); self.sleepActivity = nil }
+        detailTask?.cancel(); detailTask = nil
+        mediaSession.stop()
         engine.release(slotId: slotId)
         avController.stop()
         avActive = false
-        clipEngine.stop(slotId: clipSlotId)
-        clipEngine.release(slotId: clipSlotId)
+        clipController.stop()
         clipOverlay = nil
         isPlaying = false
         paused = false
@@ -381,65 +481,163 @@ final class PlayerState: ObservableObject {
         log(muted ? "muted" : "unmuted")
     }
 
+    func selectQuality(_ quality: PlaybackQuality?, store: RallyStore, drawable: NSView) async {
+        requestGeneration = UUID(); progress.reset()
+        let generation = requestGeneration
+        if avActive { avController.setQuality(quality) }
+        else if let candidate = primary, let url = transportURL {
+            let position = positionFraction, wasPaused = paused, revision = sessionRevision
+            buffering = true
+            do {
+                engine.stop(slotId: slotId)
+                let playable = try await engine.prepareURL(slotId: slotId, url: url, headers: transportHeaders)
+                guard !Task.isCancelled, revision == sessionRevision, generation == requestGeneration else { return }
+                let (_, tuning) = tuning(for: store)
+                try engine.play(slotId: slotId, title: candidate.title, url: playable,
+                                headers: transportHeaders, tuning: tuning, drawable: drawable, maxHeight: quality?.height ?? 0)
+                let deadline = Date().addingTimeInterval(12)
+                while (!engine.isPlaying(slotId: slotId) || engine.isBuffering(slotId: slotId)) && !engine.hasError(slotId: slotId) && Date() < deadline && !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                guard revision == sessionRevision, generation == requestGeneration else { return }
+                engine.seek(slotId: slotId, fraction: position)
+                if wasPaused { engine.pause(slotId: slotId) }
+                if !engine.isPlaying(slotId: slotId) && !wasPaused { error = "This quality could not start. Pick Auto or another source." }
+            } catch { if generation == requestGeneration { self.error = error.localizedDescription } }
+            guard generation == requestGeneration else { return }
+            buffering = false
+        }
+        qualityLabel = quality.map { "\($0.height)p" } ?? "Auto"
+    }
+
     func refreshStats() {
+        let awake = isPlaying && !paused
+        if awake && sleepActivity == nil { sleepActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled, .userInitiated], reason: "Watching Rally") }
+        if !awake, let sleepActivity { ProcessInfo.processInfo.endActivity(sleepActivity); self.sleepActivity = nil }
         if avActive {
             if let pos = avController.position() {
                 positionFraction = pos.fraction
                 positionText = pos.clock
             }
-            paused = !avController.isPlaying && isPlaying
+            canSeek = avController.seekRange != nil
+            buffering = avController.isBuffering
+            if primary != nil && !buffering {
+                paused = avController.player.timeControlStatus == .paused && avController.error == nil
+                isPlaying = avController.isPlaying || paused
+            }
+            muted = avController.player.isMuted
+            volume = Double(avController.player.volume)
+            mediaSession.update(paused: paused, elapsed: avController.player.currentTime().seconds)
+            avController.refreshTracks()
+            audioTracks = avController.audioTracks; captionTracks = avController.captionTracks
+            qualities = avController.qualities
             return
         }
         if let pos = engine.position(slotId: slotId) {
             positionFraction = pos.fraction
             positionText = pos.clock
         }
-        paused = !engine.isPlaying(slotId: slotId) && isPlaying
+        buffering = engine.isBuffering(slotId: slotId)
+        canSeek = engine.seekable(slotId: slotId)
+        audioTracks = engine.tracks(slotId: slotId, captions: false)
+        captionTracks = engine.tracks(slotId: slotId, captions: true)
     }
 }
 
 struct PlayerView: View {
     @EnvironmentObject var store: RallyStore
     @StateObject var state = PlayerState()
-    @State var host = NSView()
+    @State var host = RallyVideoHost()
     @State private var started = false
     @State var controlsVisible = true
     @State var pickerVisible = false
     @State var gameMode = false
+    @State var gameVideoHovered = false
+    @State var gameStatsExpanded = false
+    @State var momentsTab = 0
     @State var topTab = 0
     @State var infoTab = 0
+    @State var requestedPlayID: String?
+    @State var playerTeamIndex = 0
     @FocusState var liveFocus: String?
     @State var diagVisible = false
     @State private var lastMove = Date()
-    let event: SportEvent?
+    let initialEvent: SportEvent?
+    var event: SportEvent? { state.activeEvent ?? initialEvent }
+    var isHighlightPlayback: Bool { clip != nil && (state.primary == nil || state.primary?.url == clip?.streamUrl) }
     let channel: IptvChannel?
     var clip: HighlightClip?
     var startWithPicker = false
+    var source: PlayCandidate?
+    init(event: SportEvent?, channel: IptvChannel?, clip: HighlightClip? = nil, startWithPicker: Bool = false, source: PlayCandidate? = nil) {
+        initialEvent = event; self.channel = channel; self.clip = clip; self.startWithPicker = startWithPicker; self.source = source
+    }
     var body: some View {
-        Group {
-            if gameMode {
-                gameViewLayout
-            } else {
-                watchLayout
-            }
+        ZStack {
+            if gameMode { gameViewLayout } else { watchLayout }
+            if gameMode && pickerVisible { pickerPanel }
+            if gameMode && diagVisible { diagnosticsPanel }
+            if gameMode, let error = state.error, !state.isLoading { playbackErrorOverlay(error) }
         }
-        .onAppear { if LaunchArgs.gameMode { gameMode = true } }
+        .onAppear {
+            gameMode = LaunchArgs.gameMode || (event != nil && !isHighlightPlayback)
+            #if DEBUG
+            let playback = state
+            RallyAuditHost.playerInfo = { [weak playback] in
+                guard let state = playback else { return "" }
+                return "player engine=\(state.avActive ? "AVKit" : "VLC") playing=\(state.isPlaying) paused=\(state.paused) loading=\(state.isLoading) buffering=\(state.buffering) clock=\(state.positionText) muted=\(state.muted) volume=\(state.volume) error=\(state.error ?? "none")"
+            }
+            #endif
+        }
+        .background { RallyEscapeHandler { handlePlayerCommand(.dismiss) }.frame(width: 0, height: 0) }
         .background(Color.black)
+        .onReceive(NotificationCenter.default.publisher(for: .rallyPlayerCommand)) { note in
+            if let command = note.object as? PlayerCommand { handlePlayerCommand(command) }
+        }
+        .onExitCommand { handlePlayerCommand(.dismiss) }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
                 state.refreshStats()
-                await state.watchdog(store: store, drawable: host)
+                await state.watchdog(store: store, drawable: host.surface)
             }
         }
-        .onAppear {
+        .task(id: event?.id) {
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { return }
+                guard let current = event, let path = EspnClient.path(forLeague: current.league) else { continue }
+                if let events = try? await store.espnClient.fetchScoreboard(sport: path.sport, league: path.path, domainLeague: current.league),
+                   let updated = events.first(where: { $0.id == current.id }) { state.activeEvent = updated }
+                let detail = await store.espnClient.fetchSummary(sport: path.sport, league: path.path, eventId: current.id,
+                    awayAbbr: current.awayTeam?.abbreviation, homeAbbr: current.homeTeam?.abbreviation)
+                if detail.isAvailable {
+                    if let current = detail.event { state.activeEvent = current }
+                    state.plays = detail.plays; state.liveContext = detail.liveContext
+                    state.leaders = detail.leaders; state.teamStats = detail.teamStats; state.tables = detail.playerTables; state.clips = detail.clips
+                }
+            }
+        }
+        .task {
             host.wantsLayer = true
             if !started {
                 started = true
-                Task {
-                    await state.load(event: event, channel: channel, store: store, drawable: host)
-                    if let clip, clip.streamUrl != nil {
-                        await state.playClip(clip, store: store, drawable: host)
+                do {
+                    let direct = source ?? clip.flatMap { clip in clip.streamUrl.map {
+                        PlayCandidate(title: clip.title, url: $0, kind: .stremio, exactMatch: true, rank: 0, addonName: "ESPN")
+                    } }
+                    await state.load(event: event, channel: channel, store: store, drawable: host.surface, source: direct)
+                    guard !Task.isCancelled else { return }
+                    state.mediaSession.activate(title: event?.rallyMatchup ?? channel?.name ?? source?.title ?? "Rally", live: clip == nil) { [weak state = state] command in
+                        guard let state else { return }
+                        switch command {
+                        case .togglePlay: state.togglePause()
+                        case .play: if state.paused { state.togglePause() }
+                        case .pause: if !state.paused { state.togglePause() }
+                        case .seekBack: state.seekRelative(-10)
+                        case .seekForward: state.seekRelative(10)
+                        default: break
+                        }
                     }
                     if startWithPicker {
                         pickerVisible = true
@@ -450,125 +648,82 @@ struct PlayerView: View {
         }
         .onDisappear {
             state.teardown()
+            #if DEBUG
+            RallyAuditHost.playerInfo = { "" }
+            #endif
         }
-        .onHover { hovering in
-            controlsVisible = hovering || pickerVisible || diagVisible
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+                if !gameMode && !state.paused && !pickerVisible && !diagVisible && Date().timeIntervalSince(lastMove) > 3 { controlsVisible = false }
+            }
         }
     }
 
     private var watchLayout: some View {
-        ZStack {
-            VideoHost(host: state.avActive ? state.avHost : host)
-            // Top + bottom scrims (mirrors PlaybackHud gradients).
-            if controlsVisible || pickerVisible || diagVisible {
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                playbackSurface.frame(width: geo.size.width, height: geo.size.height)
                 VStack {
-                    LinearGradient(colors: [Color.black.opacity(0.65), .clear],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 120)
+                    hudTop
                     Spacer()
-                    LinearGradient(colors: [.clear, Color.black.opacity(0.9)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 220)
-                }
-                .allowsHitTesting(false)
-            }
-            VStack {
-                if controlsVisible { hudTop }
-                Spacer()
-                if controlsVisible { hudBottom }
-            }
-            if pickerVisible { pickerPanel }
-            if diagVisible { diagnosticsPanel }
-            if let err = state.error, state.primary == nil, !state.isLoading {
-                playbackErrorOverlay(err)
-            }
+                    hudBottom
+                }.opacity(controlsVisible || pickerVisible || diagVisible ? 1 : 0)
+                    .allowsHitTesting(controlsVisible || pickerVisible || diagVisible)
+                    .rallyAnimation(.easeOut(duration: 0.18), value: controlsVisible)
+                if pickerVisible { pickerPanel }
+                if diagVisible { diagnosticsPanel }
+                if let error = state.error, !state.isLoading { playbackErrorOverlay(error) }
+            }.onContinuousHover { phase in
+                if case .active = phase { lastMove = Date(); controlsVisible = true }
+            }.onTapGesture { controlsVisible = true; lastMove = Date() }
         }
     }
-
-    // MARK: HUD top (mirrors PlaybackHud header)
 
     var hudTop: some View {
-        HStack {
-            playerButton("‹ Back") { store.show(nil) }
-            Spacer()
-            if let mark = tvArt("rally_mark_ui") {
-                Image(nsImage: mark).resizable().aspectRatio(contentMode: .fit)
-                    .frame(width: 30, height: 30)
+        HStack(spacing: 14) {
+            if let image = tvArt("rally_mark_ui") { Image(nsImage: image).resizable().scaledToFit().frame(width: 28, height: 28) }
+            Button { store.show(nil) } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain).help("Back (Escape)")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(isHighlightPlayback ? (clip?.title ?? "Highlight") : (channel?.name ?? event?.rallyMatchup ?? source?.title ?? "Rally"))
+                    .font(RallyFont.font(size: 14, weight: .semibold)).lineLimit(1)
+                Text(isHighlightPlayback ? "Game Highlight" : (event?.gameStatusDetail ?? channel?.category ?? state.primary?.addonName ?? (state.primary == nil ? "Finding a source…" : "Broadcast")))
+                    .font(.caption).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
             }
-            Text(channel?.name ?? event?.name ?? "Live Sports")
-                .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
-        }
-        .padding(.horizontal, 28).padding(.vertical, 20)
+            Spacer()
+            if let event, !isHighlightPlayback {
+                Text(scoreLine(event)).font(RallyFont.font(size: 14, weight: .bold)).monospacedDigit().lineLimit(1)
+                StatusBadge(status: event.status)
+            }
+        }.foregroundStyle(RallyTheme.textPrimary).padding(.horizontal, 20).padding(.vertical, 12)
+            .background(.black.opacity(0.65))
     }
 
-    // MARK: HUD bottom (mirrors PlaybackHud footer)
-
     var hudBottom: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let event {
-                HStack(spacing: 7) {
-                    if event.status == .live || event.status == .halftime {
-                        Circle().fill(RallyTheme.liveRed).frame(width: 8, height: 8)
-                        Text("LIVE").font(.system(size: 12, weight: .bold)).tracking(0.8)
-                            .foregroundStyle(.white)
-                        Text(event.gameStatusDetail ?? event.league)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(RallyTheme.textSecondary)
-                    } else {
-                        Text(event.gameStatusDetail ?? Artwork.displayLeague(event.league))
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(RallyTheme.textSecondary)
-                    }
-                }
-                if event.homeTeam != nil {
-                    Text(scoreLine(event)).font(.system(size: 30, weight: .bold))
-                        .foregroundStyle(.white).lineLimit(1)
-                }
-                Text([event.league, event.venue].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
-            } else {
-                Text(channel?.name ?? "Live stream").font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.white).lineLimit(1)
-                Text(channel?.category ?? "Live TV").font(.system(size: 13))
-                    .foregroundStyle(RallyTheme.textSecondary)
-            }
-            HStack(spacing: 10) {
-                if event != nil {
-                    playerButton("Game View", primary: true) { gameMode = true }
-                }
-                playerButton("Fullscreen") { toggleFullscreen() }
-                Button(state.paused ? "▶" : "❚❚") { state.togglePause() }
-                    .buttonStyle(.plain).font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(RallyTheme.textPrimary)
-                    .disabled(!state.isPlaying)
-                    .keyboardShortcut(.space, modifiers: [])
-                playerButton("Restart") {
-                    Task { await state.restart(store: store, drawable: host) }
-                }
-                playerButton("Sources") { pickerVisible = true }
+        VStack(spacing: 12) {
+            desktopTransport
+            HStack(spacing: 8) {
+                playerButton(state.paused ? "Play" : "Pause", primary: true) { state.togglePause() }
+                if event != nil { playerButton("Game View") { gameMode = true } }
+                playerButton("Restart") { state.fromStart() }.disabled(!state.canSeek)
+                playerButton("Multiview") { openMultiView() }
+                audioMenu.fixedSize()
+                captionsMenu.fixedSize()
+                sourceMenu.fixedSize()
+                qualityMenu.fixedSize()
                 playerButton("Diagnostics") { diagVisible.toggle() }
-                playerButton("Multi-View (\(store.multiView.tiles.count))") { store.show(.multiView) }
-                if let p = state.primary {
-                    Text(specsLine(p)).font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(RallyTheme.textSecondary)
-                        .padding(.horizontal, 11).padding(.vertical, 7)
-                        .background(Color.white.opacity(0.16))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.white.opacity(0.13), lineWidth: 1))
-                }
-                Spacer()
-                Text(state.positionText).font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(RallyTheme.textSecondary)
-            }
-        }
-        .padding(.horizontal, 30).padding(.bottom, 27)
+            }.menuStyle(.borderlessButton).font(RallyFont.font(size: 12)).foregroundStyle(.white)
+        }.padding(.horizontal, 24).padding(.vertical, 18).background(.black.opacity(0.65))
     }
 
     func playerButton(_ label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label).font(.system(size: 14, weight: .semibold))
+            Text(label).font(RallyFont.font(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(primary ? Color.black : RallyTheme.textPrimary)
-                .padding(.horizontal, 20).padding(.vertical, 10)
+                .padding(.horizontal, 13).padding(.vertical, 9)
                 .background(primary ? RallyTheme.offWhite : Color.white.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
@@ -599,11 +754,11 @@ struct PlayerView: View {
 
     private func playbackErrorOverlay(_ message: String) -> some View {
         VStack(spacing: 12) {
-            Text(message).font(.system(size: 16, weight: .semibold))
+            Text(message).font(RallyFont.font(size: 16, weight: .semibold))
                 .foregroundStyle(.white).multilineTextAlignment(.center)
             HStack(spacing: 10) {
                 playerButton("Try Again", primary: true) {
-                    Task { await state.retry(store: store, drawable: host) }
+                    Task { await retryPlayback() }
                 }
                 if !state.candidates.isEmpty {
                     playerButton("Choose Source") { pickerVisible = true }
@@ -627,9 +782,9 @@ struct PlayerView: View {
                 HStack(spacing: 12) {
                     playerButton("‹ Matchup") { pickerVisible = false }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Choose a broadcast").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
-                        Text(event?.name ?? channel?.name ?? "Available video options")
-                            .font(.system(size: 13)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
+                        Text("Choose a broadcast").font(RallyFont.font(size: 24, weight: .bold)).foregroundStyle(.white)
+                        Text(event?.rallyMatchup ?? channel?.name ?? "Available video options")
+                            .font(RallyFont.font(size: 13)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                     }
                 }
                 .padding(20)
@@ -643,20 +798,20 @@ struct PlayerView: View {
                     .padding()
                 } else if state.candidates.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("No broadcast is available yet").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                        Text("No broadcast is available yet").font(RallyFont.font(size: 18, weight: .semibold)).foregroundStyle(.white)
                         Text("Broadcasts can appear closer to game time. Check again later or review Sources in Settings.")
                             .font(.callout).foregroundStyle(RallyTheme.textSecondary)
                         HStack {
                             playerButton("Retry") {
-                                Task { await state.retry(store: store, drawable: host) }
+                                Task { await retryPlayback() }
                             }
                             playerButton("Open Settings") { store.show(.settings) }
                         }
                     }
                     .padding(20)
                 } else {
-                    Text("Recommended broadcasts · Verified for this matchup")
-                        .font(.system(size: 12)).foregroundStyle(RallyTheme.textTertiary)
+                    Text("Available broadcasts")
+                        .font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textTertiary)
                         .padding(.horizontal, 20).padding(.bottom, 8)
                     ScrollView {
                         LazyVStack(spacing: 10) {
@@ -677,45 +832,41 @@ struct PlayerView: View {
     private func sourceCard(_ cand: PlayCandidate) -> some View {
         Button {
             Task {
-                await state.switchTo(cand, store: store, drawable: host)
+                await state.switchTo(cand, store: store, drawable: host.surface)
                 pickerVisible = false
             }
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(cand.title).font(.system(size: 15, weight: .semibold))
+                    Text(cand.title).font(RallyFont.font(size: 15, weight: .semibold))
                         .foregroundStyle(.white).lineLimit(2)
                     if let addon = cand.addonName {
-                        Text(addon).font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
+                        Text(addon).font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                     }
                     HStack(spacing: 6) {
                         if cand.exactMatch {
-                            Text("Exact matchup").font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(RallyTheme.rallyLime)
+                            Text("Exact matchup").font(RallyFont.font(size: 10, weight: .bold))
+                                .foregroundStyle(RallyTheme.textPrimary)
                         }
-                        Text(specsLine(cand)).font(.system(size: 10, weight: .semibold))
+                        Text(specsLine(cand)).font(RallyFont.font(size: 10, weight: .semibold))
                             .foregroundStyle(RallyTheme.textSecondary)
                         if let note = state.candidateNote[cand.id] {
-                            Text(note).font(.system(size: 10)).foregroundStyle(RallyTheme.textSecondary)
+                            Text(note).font(RallyFont.font(size: 10)).foregroundStyle(RallyTheme.textSecondary)
                         }
                     }
                 }
                 Spacer()
-                Button("+ Tile") { store.multiView.add(candidate: cand) }
-                    .font(.caption)
-                    .disabled(!store.multiView.canAdd)
                 if cand.id == state.primary?.id {
-                    Image(systemName: "play.fill").foregroundStyle(RallyTheme.rallyCyan)
+                    Image(systemName: "play.fill").foregroundStyle(RallyTheme.textPrimary)
                 } else {
-                    Text("Play  ›").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Play  ›").font(RallyFont.font(size: 14, weight: .semibold)).foregroundStyle(.white)
                 }
             }
             .padding(.horizontal, 18).padding(.vertical, 15)
-            .background(LinearGradient(colors: [Color(red: 34/255, green: 51/255, blue: 73/255, opacity: 0.72),
-                                                Color(red: 14/255, green: 25/255, blue: 39/255, opacity: 0.64)],
-                                       startPoint: .top, endPoint: .bottom))
+            .background(RallyTheme.surfaceRaised)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(cand.url.isEmpty)
@@ -728,7 +879,7 @@ struct PlayerView: View {
             Spacer()
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("DIAGNOSTICS").font(.system(size: 15, weight: .bold)).tracking(1.4).foregroundStyle(.white)
+                    Text("DIAGNOSTICS").font(RallyFont.font(size: 15, weight: .bold)).tracking(1.4).foregroundStyle(.white)
                     Spacer()
                     Button("Close") { diagVisible = false }.font(.caption)
                 }
@@ -752,7 +903,7 @@ struct PlayerView: View {
                 }
                 Divider().opacity(0.3)
                 ForEach(state.trace.suffix(8), id: \.self) { line in
-                    Text(line).font(.system(size: 10).monospaced()).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
+                    Text(line).font(RallyFont.font(size: 10).monospaced()).foregroundStyle(RallyTheme.textTertiary).lineLimit(1)
                 }
                 Spacer()
             }
@@ -765,9 +916,9 @@ struct PlayerView: View {
 
     func diagRow(_ label: String, _ value: String) -> some View {
         HStack {
-            Text(label).font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary)
+            Text(label).font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary)
             Spacer()
-            Text(value).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+            Text(value).font(RallyFont.font(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
         }
     }
 
@@ -786,39 +937,76 @@ final class MultiViewState: ObservableObject {
         var id = UUID().uuidString
         var title: String
         var candidate: PlayCandidate
+        var event: SportEvent?
         var audioOn = false
         var status: Status = .loading
         var note: String?
+        var useAV = false
+        var isStats = false
         enum Status: Equatable { case loading, playing, failed }
     }
     @Published var tiles: [Tile] = []
     @Published var layout: LayoutMode = .grid
     @Published var soloId: String?
+    @Published var immersive = false
+    @Published var audioFollowsFocus = false
+    @Published var gameDetails: [String: EspnClient.GameDetail] = [:]
+    @Published var statsLoading = false
+    private var hosts: [String: RallyVideoHost] = [:]
+    private var startedTiles = Set<String>()
+    private var progressByTile: [String: PlaybackProgress] = [:]
+    private var sleepActivity: NSObjectProtocol?
     let engine = VlcEngine()
+    private var nativePlayers: [String: PlaybackController] = [:]
+    private var loadTasks: [String: Task<Void, Never>] = [:]
+    func nativePlayer(for tile: Tile) -> PlaybackController {
+        if let player = nativePlayers[tile.id] { return player }
+        let player = PlaybackController(); nativePlayers[tile.id] = player
+        return player
+    }
 
     /// Tile cap follows the device profile (constrained hardware: 2 tiles).
-    var canAdd: Bool { tiles.count < PlaybackProfile.resolve().maxTiles }
+    var canAdd: Bool { tiles.count < maxTiles }
     var maxTiles: Int { PlaybackProfile.resolve().maxTiles }
 
-    func add(candidate: PlayCandidate) {
-        guard canAdd, engine.reserve(slotId: candidate.id) else { return }
-        var tile = Tile(title: candidate.title, candidate: candidate)
+    func add(candidate: PlayCandidate, event: SportEvent? = nil) {
+        guard canAdd, !tiles.contains(where: { $0.candidate.id == candidate.id }), engine.reserve(slotId: candidate.id) else { return }
+        var tile = Tile(title: event?.rallyMatchup ?? candidate.title, candidate: candidate, event: event)
         tile.audioOn = tiles.allSatisfy { !$0.audioOn }
         tiles.append(tile)
         applyAudioFocus()
     }
 
+    func addStats() {
+        guard canAdd, !tiles.contains(where: \.isStats) else { return }
+        var tile = Tile(title: "Player Stats", candidate: PlayCandidate(title: "Player Stats", url: "", kind: .stremio, exactMatch: false, rank: 0), event: nil)
+        tile.isStats = true; tile.status = .playing
+        tiles.append(tile)
+    }
+    func host(for tile: Tile) -> RallyVideoHost {
+        if let host = hosts[tile.id] { return host }
+        let host = RallyVideoHost(); hosts[tile.id] = host; return host
+    }
+    func ensurePlaying(_ tile: Tile, tuning: PlaybackTuning, store: RallyStore) {
+        guard !tile.isStats, !startedTiles.contains(tile.id) else { return }
+        startedTiles.insert(tile.id)
+        play(tile: tile, tuning: tuning, drawable: host(for: tile).surface, store: store)
+    }
     func remove(_ tile: Tile) {
         tiles.removeAll { $0.id == tile.id }
+        hosts.removeValue(forKey: tile.id); startedTiles.remove(tile.id); progressByTile.removeValue(forKey: tile.id)
+        loadTasks.removeValue(forKey: tile.id)?.cancel()
+        nativePlayers.removeValue(forKey: tile.id)?.stop()
         engine.release(slotId: tile.candidate.id)
         if soloId == tile.id { soloId = nil }
-        if tile.audioOn, let first = tiles.first {
+        if tile.audioOn, let first = tiles.first(where: { !$0.isStats }) {
             setAudio(tileId: first.id, on: true)
         }
     }
 
     /// Single-audio-focus: exactly one tile audible (Android single-audio).
     func setAudio(tileId: String, on: Bool) {
+        guard tiles.contains(where: { $0.id == tileId && !$0.isStats }) else { return }
         for i in tiles.indices {
             tiles[i].audioOn = tiles[i].id == tileId ? on : false
         }
@@ -826,31 +1014,94 @@ final class MultiViewState: ObservableObject {
     }
 
     private func applyAudioFocus() {
-        for tile in tiles {
-            engine.setMuted(slotId: tile.candidate.id, muted: !tile.audioOn)
+        for tile in tiles where !tile.isStats {
+            engine.setMuted(slotId: tile.candidate.id, muted: true)
+            nativePlayers[tile.id]?.player.isMuted = true
+        }
+        if let tile = tiles.first(where: { $0.audioOn && !$0.isStats }) {
+            engine.setMuted(slotId: tile.candidate.id, muted: false)
+            nativePlayers[tile.id]?.player.isMuted = false
         }
     }
 
-    func play(tile: Tile, tuning: PlaybackTuning, drawable: NSView) {
-        guard let url = URL(string: tile.candidate.url) else {
+    func play(tile: Tile, tuning: PlaybackTuning, drawable: NSView, store: RallyStore) {
+        guard !tile.isStats else { return }
+        loadTasks[tile.id]?.cancel()
+        loadTasks[tile.id] = Task {
+        var candidate = tile.candidate
+        if let channel = candidate.channel {
+            switch store.settings.iptvProvider {
+            case .stalker:
+                candidate.url = await store.stalkerClient.resolveStreamUrl(channelId: channel.id)
+                candidate.headers = ["User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Cookie": "mac=\(store.settings.macAddress); stb_lang=en; timezone=America/New_York", "Authorization": "Bearer \(store.settings.authToken)"]
+            case .xtream: candidate.url = await store.xtreamClient.resolveStreamUrl(channelId: channel.id)
+            case .m3u: candidate.headers = channel.streamHeaders
+            }
+        }
+        guard !Task.isCancelled, tiles.contains(where: { $0.id == tile.id }) else { return }
+        guard let url = URL(string: candidate.url), url.host != nil else {
             setStatus(id: tile.id, status: .failed, note: "Bad stream URL")
             return
         }
         setStatus(id: tile.id, status: .loading, note: nil)
         do {
-            let safeHeaders = StreamRequestHeaders.sanitized(tile.candidate.headers)
-            try engine.play(slotId: tile.candidate.id, title: tile.title, url: url,
+            let safeHeaders = StreamRequestHeaders.sanitized(candidate.headers)
+            if PlaybackRoute.usesAVPlayer(headers: safeHeaders, url: url) {
+                if let i = tiles.firstIndex(where: { $0.id == tile.id }) { tiles[i].useAV = true; tiles[i].candidate = candidate }
+                let player = nativePlayer(for: tile)
+                player.player.isMuted = true
+                player.play(url: url, headers: safeHeaders, lowLatency: store.settings.lowLatencyMode)
+                player.setQuality(PlaybackQuality(height: 720, bitrate: 0))
+                let ready = await player.waitUntilReady()
+                guard !Task.isCancelled else { return }
+                if ready { setStatus(id: tile.id, status: .playing, note: nil); applyAudioFocus(); return }
+                player.stop()
+            }
+            if let i = tiles.firstIndex(where: { $0.id == tile.id }) { tiles[i].useAV = false; tiles[i].candidate = candidate }
+            let playable = try await engine.prepareURL(slotId: tile.candidate.id, url: url, headers: safeHeaders)
+            guard !Task.isCancelled else { return }
+            try engine.play(slotId: tile.candidate.id, title: tile.title, url: playable,
                             headers: safeHeaders.isEmpty ? nil : safeHeaders,
-                            tuning: tuning, drawable: drawable)
-            setStatus(id: tile.id, status: .playing, note: nil)
+                            tuning: tuning, drawable: drawable, maxHeight: 720)
+            engine.setMuted(slotId: tile.candidate.id, muted: true)
+            let deadline = Date().addingTimeInterval(12)
+            while (!engine.isPlaying(slotId: tile.candidate.id) || engine.isBuffering(slotId: tile.candidate.id)) && !engine.hasError(slotId: tile.candidate.id) && Date() < deadline && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            setStatus(id: tile.id, status: engine.isPlaying(slotId: tile.candidate.id) ? .playing : .failed,
+                      note: engine.isPlaying(slotId: tile.candidate.id) ? nil : "The source did not start playback.")
             applyAudioFocus()
         } catch {
             setStatus(id: tile.id, status: .failed, note: "Failed: \(error.localizedDescription)")
         }
+        }
     }
 
-    func retry(tile: Tile, tuning: PlaybackTuning, drawable: NSView) {
-        play(tile: tile, tuning: tuning, drawable: drawable)
+    func retry(tile: Tile, tuning: PlaybackTuning, drawable: NSView, store: RallyStore) {
+        progressByTile[tile.id] = PlaybackProgress()
+        play(tile: tile, tuning: tuning, drawable: drawable, store: store)
+    }
+
+    func checkProgress(tuning: PlaybackTuning, store: RallyStore) {
+        let broadcasts = tiles.filter { !$0.isStats && $0.status == .playing }
+        if !broadcasts.isEmpty && sleepActivity == nil { sleepActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled], reason: "Watching Rally Multi-View") }
+        if broadcasts.isEmpty, let sleepActivity { ProcessInfo.processInfo.endActivity(sleepActivity); self.sleepActivity = nil }
+        for tile in broadcasts {
+            let native = nativePlayers[tile.id]
+            if tile.useAV && native?.ended == true { continue }
+            let seconds = tile.useAV ? native?.player.currentTime().seconds : engine.elapsedSeconds(slotId: tile.candidate.id)
+            let paused = tile.useAV && native?.player.timeControlStatus == .paused && native?.error == nil
+            var progress = progressByTile[tile.id] ?? PlaybackProgress()
+            let failed = tile.useAV ? native?.error != nil : engine.hasError(slotId: tile.candidate.id)
+            if failed || progress.stalled(position: seconds, paused: paused) {
+                if progress.consumeReconnect() {
+                    progress.reset(keepBudget: true)
+                    play(tile: tile, tuning: tuning, drawable: host(for: tile).surface, store: store)
+                } else { setStatus(id: tile.id, status: .failed, note: "This broadcast stopped. Retry or choose another source.") }
+            }
+            progressByTile[tile.id] = progress
+        }
     }
 
     private func setStatus(id: String, status: Tile.Status, note: String?) {
@@ -859,102 +1110,153 @@ final class MultiViewState: ObservableObject {
         tiles[i].note = note
     }
 
+    #if DEBUG
+    var auditStatus: String {
+        "layout=\(layout) immersive=\(immersive) tiles=\(tiles.count) audioFollow=\(audioFollowsFocus) games=\(gameDetails.count)\n" + tiles.map { tile in
+            let clock = nativePlayers[tile.id]?.player.currentTime().seconds ?? engine.elapsedSeconds(slotId: tile.candidate.id) ?? -1
+            let muted = tile.useAV ? nativePlayers[tile.id]?.player.isMuted ?? true : engine.isMuted(slotId: tile.candidate.id)
+            return "\(tile.title) stats=\(tile.isStats) status=\(tile.status) audio=\(tile.audioOn) muted=\(muted) clock=\(clock)"
+        }.joined(separator: "\n")
+    }
+    #endif
+
     func teardown() {
+        loadTasks.values.forEach { $0.cancel() }; loadTasks = [:]
+        nativePlayers.values.forEach { $0.stop() }; nativePlayers = [:]
         engine.releaseAll()
+        if let sleepActivity { ProcessInfo.processInfo.endActivity(sleepActivity); self.sleepActivity = nil }
+        progressByTile = [:]
         tiles.removeAll()
         soloId = nil
-        layout = .grid
+        layout = .grid; immersive = false; hosts = [:]; startedTiles = []; gameDetails = [:]
     }
 }
 
 struct MultiViewView: View {
     @EnvironmentObject var store: RallyStore
     @ObservedObject var state: MultiViewState
-    @State private var reloadTick = 0
+    @State private var choosingSource = false
+    @FocusState private var focusedTile: String?
+    private var statsEvents: [SportEvent] {
+        MultiViewGames.statsEvents(selected: state.tiles.compactMap(\.event), titles: state.tiles.map(\.title), schedule: store.scheduleEvents + store.events)
+    }
     private func tuning() -> PlaybackTuning {
         let profile = PlaybackProfile.resolve(lowLatency: store.settings.lowLatencyMode)
-        return PlaybackTuning(lowLatency: store.settings.lowLatencyMode,
-                              audioNormalization: store.settings.audioNormalizationEnabled,
-                              networkCachingMs: profile.networkCachingMs)
-    }
-    private var visibleTiles: [MultiViewState.Tile] {
-        if state.layout == .single, let id = state.soloId {
-            return state.tiles.filter { $0.id == id }
-        }
-        return state.tiles
+        return PlaybackTuning(lowLatency: store.settings.lowLatencyMode, audioNormalization: store.settings.audioNormalizationEnabled, networkCachingMs: profile.networkCachingMs)
     }
     var body: some View {
-        VStack(spacing: 8) {
-            if state.tiles.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "rectangle.split.2x2").font(.largeTitle)
-                    Text("Multi-View").font(.headline)
-                    Text("Open an event and add its sources as tiles (max \(state.maxTiles)).")
-                        .font(.caption).foregroundStyle(RallyTheme.textTertiary)
+        GeometryReader { geo in
+            ZStack(alignment: .top) {
+                Color.black
+                VStack(spacing: state.immersive ? 0 : 12) {
+                    if !state.immersive { toolbar }
+                    if state.tiles.isEmpty {
+                        VStack(spacing: 14) {
+                            Image(systemName: "rectangle.split.2x2").font(.largeTitle)
+                            Text("Watch up to \(state.maxTiles) broadcasts together.").font(RallyFont.font(size: 18))
+                            Button("Choose Sources") { choosingSource = true }.buttonStyle(RallyActionStyle(primary: true))
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        GeometryReader { grid in
+                            let frames = MultiViewGeometry.frames(count: state.tiles.count, width: grid.size.width, height: grid.size.height, immersive: state.immersive, focus: state.layout == .focus)
+                            ZStack(alignment: .topLeading) {
+                                ForEach(Array(state.tiles.enumerated()), id: \.element.id) { index, tile in
+                                    let frame = frames[index]
+                                    let solo = state.layout == .single && state.soloId == tile.id
+                                    tileCard(tile).frame(width: solo ? grid.size.width : frame.width, height: solo ? grid.size.height : frame.height)
+                                        .offset(x: solo ? 0 : frame.minX, y: solo ? 0 : frame.minY)
+                                        .opacity(state.layout == .single && !solo ? 0 : 1)
+                                        .allowsHitTesting(state.layout != .single || solo)
+                                        .zIndex(solo ? 1 : 0)
+                                }
+                            }.frame(width: grid.size.width, height: grid.size.height, alignment: .topLeading).clipped()
+                        }
+                    }
+                }.padding(state.immersive ? 0 : 20)
+                if state.immersive {
+                    HStack { Text("MULTIVIEW").font(RallyFont.font(size: 11, weight: .semibold)).tracking(1.4); Spacer(); Button("Exit Immersive") { state.immersive = false }.buttonStyle(RallyActionStyle()) }.padding(16).background(.black.opacity(0.5))
                 }
-            } else {
-                HStack(spacing: 8) {
-                    Text("Multi-View (\(state.tiles.count)/\(state.maxTiles))").font(.headline)
-                    Spacer()
-                    Picker("Layout", selection: $state.layout) {
-                        Text("Grid").tag(MultiViewState.LayoutMode.grid)
-                        Text("Focus").tag(MultiViewState.LayoutMode.focus)
-                        Text("Single").tag(MultiViewState.LayoutMode.single)
+            }.foregroundStyle(.white)
+        }.sheet(isPresented: $choosingSource) { MultiViewSourcePicker(state: state).environmentObject(store) }
+            .background { RallyEscapeHandler { if state.immersive { state.immersive = false } else { store.show(nil) } }.frame(width: 0, height: 0) }
+            .onChange(of: focusedTile) { id in if state.audioFollowsFocus, let id { state.setAudio(tileId: id, on: true) } }
+            .task(id: statsEvents.map(\.id).joined(separator: ",") + String(state.tiles.contains(where: \.isStats))) {
+                guard state.tiles.contains(where: \.isStats) else { return }
+                if state.tiles.contains(where: { $0.title.range(of: #"red\s*zone"#, options: .regularExpression.union(.caseInsensitive)) != nil }) { await store.refreshSchedule() }
+                while !Task.isCancelled {
+                    state.statsLoading = true
+                    for event in statsEvents {
+                        guard let path = EspnClient.path(forLeague: event.league) else { continue }
+                        let detail = await store.espnClient.fetchSummary(sport: path.sport, league: path.path, eventId: event.id, awayAbbr: event.awayTeam?.abbreviation, homeAbbr: event.homeTeam?.abbreviation)
+                        guard !Task.isCancelled else { return }
+                        if detail.isAvailable { state.gameDetails[event.id] = detail }
                     }
-                    .frame(maxWidth: 220)
-                    .onChange(of: state.layout) { _ in
-                        if state.layout != .single { state.soloId = nil }
-                        else if state.soloId == nil { state.soloId = state.tiles.first?.id }
-                    }
-                }
-                .padding(.horizontal, 8)
-                if state.layout == .focus, let first = state.tiles.first {
-                    tileCard(first, large: true)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
-                        ForEach(state.tiles.dropFirst()) { tile in tileCard(tile, large: false) }
-                    }
-                    .padding(.horizontal, 8)
-                } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
-                                            count: visibleTiles.count > 1 && state.layout == .grid ? 2 : 1), spacing: 8) {
-                        ForEach(visibleTiles) { tile in tileCard(tile, large: state.layout != .grid) }
-                    }
-                    .padding(8)
+                    state.statsLoading = false
+                    do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { return }
                 }
             }
-        }
-        .background(RallyTheme.background)
-        .navigationTitle("Multi-View")
-        .onDisappear { state.teardown() }
+            .task {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                    state.checkProgress(tuning: tuning(), store: store)
+                }
+            }
+            .onDisappear { state.teardown() }
     }
-
-    private func tileCard(_ tile: MultiViewState.Tile, large: Bool) -> some View {
-        VStack(spacing: 4) {
-            VLCVideoView { [tile] view in state.play(tile: tile, tuning: tuning(), drawable: view) }
-                .frame(minHeight: large ? 320 : 200)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: RallyTheme.cardCorner))
-                .id("\(tile.id)-\(reloadTick)")
-            HStack(spacing: 8) {
-                Button { state.setAudio(tileId: tile.id, on: !tile.audioOn) } label: {
-                    Text(tile.audioOn ? "🔊" : "🔇").font(.caption)
-                }.buttonStyle(.plain)
-                Text(tile.title).font(.caption).lineLimit(1)
-                if tile.status == .failed, let note = tile.note {
-                    Text(note).font(.caption2).foregroundStyle(RallyTheme.liveRed).lineLimit(1)
-                }
-                Spacer()
-                if tile.status == .failed {
-                    Button("Retry") {
-                        reloadTick += 1
-                    }.font(.caption).buttonStyle(.plain)
-                }
-                Button(state.soloId == tile.id ? "Unfocus" : "Solo") {
-                    if state.soloId == tile.id { state.soloId = nil; state.layout = .grid }
-                    else { state.soloId = tile.id; state.layout = .single }
-                }.font(.caption).buttonStyle(.plain)
-                Button("Remove") { state.remove(tile) }.font(.caption)
+    private var toolbar: some View {
+        HStack(spacing: 14) {
+            if let image = tvArt("rally_mark_ui") { Image(nsImage: image).resizable().scaledToFit().frame(width: 28, height: 28) }
+            Text("Multi-View").font(RallyFont.font(size: 20, weight: .semibold))
+            Spacer()
+            Menu {
+                Button("Grid") { state.layout = .grid; state.soloId = nil }
+                Button("Focus") { state.layout = .focus; state.soloId = nil }
+                Toggle("Audio Follows Focus", isOn: $state.audioFollowsFocus)
+            } label: { Label("Layout", systemImage: "rectangle.split.2x2") }.fixedSize()
+            Button("Add Broadcast") { choosingSource = true }.disabled(!state.canAdd)
+            Button("Add Stats") { state.addStats() }.disabled(!state.canAdd || state.tiles.contains(where: \.isStats))
+            Button("Immersive") { state.immersive = true }
+            Button { store.show(nil) } label: { Image(systemName: "xmark") }.help("Close Multi-View")
+        }.font(RallyFont.font(size: 12)).buttonStyle(.plain).menuStyle(.borderlessButton)
+    }
+    private func tileCard(_ tile: MultiViewState.Tile) -> some View {
+        ZStack(alignment: .bottom) {
+            if tile.isStats { statsCard }
+            else {
+                ZStack {
+                    VideoHost(host: state.host(for: tile)).opacity(tile.useAV ? 0 : 1)
+                    NativePlayerView(controller: state.nativePlayer(for: tile), showsControls: false).opacity(tile.useAV ? 1 : 0).allowsHitTesting(false)
+                    if tile.status == .loading { ProgressView("Connecting…").padding(12).background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 8)) }
+                    if tile.status == .failed { VStack(spacing: 8) { Text(tile.note ?? "Playback failed").font(RallyFont.font(size: 12)); Button("Retry") { state.retry(tile: tile, tuning: tuning(), drawable: state.host(for: tile).surface, store: store) } }.padding(16) }
+                }.aspectRatio(16.0 / 9.0, contentMode: .fit).frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)
+                    .task { state.ensurePlaying(tile, tuning: tuning(), store: store) }
             }
-        }
+            HStack(spacing: 10) {
+                if !tile.isStats {
+                    Button { state.setAudio(tileId: tile.id, on: !tile.audioOn) } label: { Image(systemName: tile.audioOn ? "speaker.wave.2.fill" : "speaker.slash") }.help("Listen to this broadcast")
+                    Text(tile.title).lineLimit(1)
+                } else { Text("PLAYER STATS").tracking(1) }
+                Spacer()
+                Button(state.soloId == tile.id ? "Grid" : "Solo") { if state.soloId == tile.id { state.soloId = nil; state.layout = .grid } else { state.soloId = tile.id; state.layout = .single } }
+                if !tile.isStats { Button("Open") { store.show(.player(event: tile.event, channel: tile.candidate.channel, source: tile.candidate)) } }
+                Button { state.remove(tile) } label: { Image(systemName: "xmark") }.help("Remove tile")
+            }.font(RallyFont.font(size: 11)).buttonStyle(.plain).padding(10).background(.black.opacity(0.6))
+        }.clipShape(RoundedRectangle(cornerRadius: state.immersive ? 0 : 8))
+            .overlay(RoundedRectangle(cornerRadius: state.immersive ? 0 : 8).stroke(tile.audioOn && !state.immersive ? .white.opacity(0.55) : .clear, lineWidth: 1))
+            .focusable().focused($focusedTile, equals: tile.id)
+    }
+    private var statsCard: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if state.statsLoading && state.gameDetails.isEmpty { ProgressView("Loading player stats…") }
+                if statsEvents.isEmpty { Text("Add a game broadcast to see its players. RedZone includes today’s daytime NFL games.").font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary) }
+                ForEach(statsEvents) { event in
+                    HStack(spacing: 8) { RallyTeamLogo(team: event.awayTeam, size: 24); Text(event.rallyMatchup).font(RallyFont.font(size: 14, weight: .semibold)); RallyTeamLogo(team: event.homeTeam, size: 24) }
+                    if let detail = state.gameDetails[event.id] { RallyPlayersPanel(tables: detail.playerTables, compact: true) }
+                    else { Text("No player statistics published yet.").font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary) }
+                    Divider().opacity(0.2)
+                }
+            }.padding(16).padding(.bottom, 40)
+        }.background(RallyTheme.background)
     }
 }

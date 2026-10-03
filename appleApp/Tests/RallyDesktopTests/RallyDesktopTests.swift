@@ -133,10 +133,10 @@ final class RallyDesktopTests: XCTestCase {
         let defaults = UserDefaults(suiteName: "RallyTests")!
         defaults.removePersistentDomain(forName: "RallyTests")
         let store = SettingsStore(defaults: defaults)
-        XCTAssertEqual(store.stremioAddonUrls, [SettingsStore.defaultAddon])
+        XCTAssertTrue(store.stremioAddonUrls.isEmpty)
         XCTAssertTrue(store.liveGameAlertsEnabled)
         XCTAssertFalse(store.setupComplete)
-        XCTAssertFalse(store.hasCredentials == false && store.stremioAddonUrls.isEmpty)
+        XCTAssertFalse(store.hasCredentials)
         let team = FavoriteTeam(id: "1", league: "NFL", name: "Cowboys", abbreviation: "DAL")
         XCTAssertTrue(store.toggleFavoriteTeam(team))
         XCTAssertTrue(store.isFavoriteTeam(id: "1", league: "nfl"))
@@ -225,6 +225,66 @@ final class RallyDesktopTests: XCTestCase {
         XCTAssertEqual(detail.clips.count, 1)
         XCTAssertEqual(detail.clips[0].streamUrl, "http://x/h.m3u8")
         XCTAssertEqual(detail.clips[0].durationSeconds, 42)
+    }
+
+    func testScoreboardUsesCompetitionMetadataAndPreservesBroadcastOrder() async throws {
+        let json = """
+        {"events":[{"id":"e1","date":"2026-09-28T00:00:00Z","name":"Away at Home",
+          "competitions":[{"date":"2026-09-29T00:15Z",
+            "status":{"type":{"name":"STATUS_CANCELED","state":"post","completed":false,
+              "detail":"Canceled due to weather","shortDetail":"Canceled"}},
+            "notes":[{"headline":"International Series"}],
+            "venue":{"fullName":"Rally Field"},
+            "broadcasts":[{"names":["ESPN","ABC"]},{"names":["ESPN"]}],
+            "competitors":[
+              {"homeAway":"home","score":"3.0","team":{"id":"h","displayName":"Home",
+                "abbreviation":"HME","color":"112233","alternateColor":"445566",
+                "logos":[{"href":"http://x/home.png"}]}},
+              {"homeAway":"away","score":"2","team":{"id":"a","displayName":"Away",
+                "abbreviation":"AWY","logo":"http://x/away.png"}}
+            ]}]}]}
+        """
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.result = nil
+        StubURLProtocol.body = json.data(using: .utf8)
+        let events = try await EspnClient(session: URLSession(configuration: config))
+            .fetchScoreboard(sport: "football", league: "nfl", domainLeague: "NFL")
+        let event = try XCTUnwrap(events.first)
+        XCTAssertEqual(event.status, .canceled)
+        XCTAssertEqual(event.gameStatusDetail, "Canceled due to weather")
+        XCTAssertEqual(event.venue, "Rally Field")
+        XCTAssertEqual(event.broadcasts, ["ESPN", "ABC"])
+        XCTAssertEqual(event.homeTeam?.logoUrl, "http://x/home.png")
+        XCTAssertEqual(event.homeTeam?.colors, ["#112233", "#445566"])
+        XCTAssertEqual(event.scoreHome, 3)
+        XCTAssertEqual(event.startTime, ISO8601DateFormatter().date(from: "2026-09-29T00:15:00Z"))
+        StubURLProtocol.body = nil
+    }
+
+    func testSummaryMapsVenueWeatherAndEditorialMetadata() async {
+        let json = """
+        {"gameInfo":{"venue":{"fullName":"Soldier Field",
+          "address":{"city":"Chicago","state":"IL"},
+          "images":[{"href":"http://x/venue.jpg"}]},
+          "weather":{"temperature":64,"gust":7,"precipitation":0}},
+         "article":{"headline":"Matchup preview","description":"A complete preview."},
+         "videos":[{"id":"clip-7","headline":"Preview","links":{}}]}
+        """
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.result = nil
+        StubURLProtocol.body = json.data(using: .utf8)
+        let detail = await EspnClient(session: URLSession(configuration: config))
+            .fetchSummary(sport: "football", league: "nfl", eventId: "e1")
+        XCTAssertEqual(detail.venueName, "Soldier Field")
+        XCTAssertEqual(detail.venueLocation, "Chicago, IL")
+        XCTAssertEqual(detail.venueImageUrl, "http://x/venue.jpg")
+        XCTAssertEqual(detail.weatherSummary, "64°F · gusts 7 mph")
+        XCTAssertEqual(detail.headline, "Matchup preview")
+        XCTAssertEqual(detail.summary, "A complete preview.")
+        XCTAssertEqual(detail.clips.first?.id, "clip-7")
+        StubURLProtocol.body = nil
     }
 
     func testPredictorMapping() async {

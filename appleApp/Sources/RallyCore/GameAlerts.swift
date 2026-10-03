@@ -45,11 +45,11 @@ public enum GameAlerts {
 
     /// Pure transition scan over a refresh (previous vs current snapshots).
     public static func evaluate(previous: [SportEvent], current: [SportEvent],
-                                favIds: Set<String>, redZoneEnabled: Bool) -> [GameAlert] {
+                                favIds: Set<String>, redZoneEnabled: Bool, savedEventIds: Set<String> = []) -> [GameAlert] {
         let prevById = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         var out: [GameAlert] = []
         for e in current {
-            guard involvesFavorite(e, favIds: favIds) else { continue }
+            guard savedEventIds.contains(e.id) || involvesFavorite(e, favIds: favIds) else { continue }
             let prev = prevById[e.id]
             let title = e.name.isEmpty ? "Game update" : e.name
             // Kickoff.

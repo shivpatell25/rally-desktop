@@ -8,13 +8,15 @@ public struct IptvChannel: Codable, Sendable, Equatable, Identifiable {
     public var category: String
     public var logoUrl: String?
     public var streamUrl: String?
+    public var streamHeaders: [String: String]?
     public var guide: ChannelGuide?
     public var supportsCatchUp: Bool
     public var archiveDurationHours: Int?
     public init(id: String, number: String, name: String, category: String = "Live TV",
                 logoUrl: String? = nil, streamUrl: String? = nil, guide: ChannelGuide? = nil,
-                supportsCatchUp: Bool = false, archiveDurationHours: Int? = nil) {
+                supportsCatchUp: Bool = false, archiveDurationHours: Int? = nil, streamHeaders: [String: String]? = nil) {
         self.id = id; self.number = number; self.name = name; self.category = category
+        self.streamHeaders = streamHeaders
         self.logoUrl = logoUrl; self.streamUrl = streamUrl; self.guide = guide
         self.supportsCatchUp = supportsCatchUp; self.archiveDurationHours = archiveDurationHours
     }

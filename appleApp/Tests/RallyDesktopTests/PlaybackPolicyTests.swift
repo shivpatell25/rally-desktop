@@ -52,10 +52,10 @@ final class PlaybackPolicyTests: XCTestCase {
         let ts = URL(string: "https://cdn/game.ts")!
         XCTAssertTrue(PlaybackRoute.usesAVPlayer(headers: ["Cookie": "mac=1"], url: hls))
         XCTAssertTrue(PlaybackRoute.usesAVPlayer(headers: ["Authorization": "Bearer x"], url: hls))
-        // No privileged headers: VLC even for HLS.
-        XCTAssertFalse(PlaybackRoute.usesAVPlayer(headers: ["User-Agent": "Rally"], url: hls))
+        // HLS uses native AVKit with or without request headers.
+        XCTAssertTrue(PlaybackRoute.usesAVPlayer(headers: ["User-Agent": "Rally"], url: hls))
         // Cookie-gated TS stays on VLC (AVPlayer route is HLS-only).
         XCTAssertFalse(PlaybackRoute.usesAVPlayer(headers: ["Cookie": "mac=1"], url: ts))
-        XCTAssertFalse(PlaybackRoute.usesAVPlayer(headers: [:], url: hls))
+        XCTAssertTrue(PlaybackRoute.usesAVPlayer(headers: [:], url: hls))
     }
 }

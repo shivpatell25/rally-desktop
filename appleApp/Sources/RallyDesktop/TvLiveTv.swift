@@ -8,6 +8,7 @@ struct TvLiveTv: View {
     @EnvironmentObject var store: RallyStore
     @EnvironmentObject var settings: SettingsStore
     @State private var query = ""
+    @State private var category = "All Channels"
     @State private var guides: [String: ChannelGuide] = [:]
     @State private var loadingGuides = false
     @State private var inflight: Set<String> = []
@@ -17,62 +18,73 @@ struct TvLiveTv: View {
     private let guideSemaphore = AsyncSemaphore(limit: 4)
 
     private var filtered: [IptvChannel] {
-        guard !query.isEmpty else { return store.channels }
         let q = query.lowercased()
-        return store.channels.filter { $0.name.lowercased().contains(q) || $0.number.contains(q) }
+        return store.channels.filter { (category == "All Channels" || $0.category == category) && (q.isEmpty || $0.name.lowercased().contains(q) || $0.number.contains(q) || $0.category.lowercased().contains(q)) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("LIVE TV").font(.system(size: 11, weight: .bold)).tracking(1.5)
-                        .foregroundStyle(RallyTheme.rallyCyan)
-                    Text("\(store.channels.count) channels").font(.system(size: 24, weight: .black))
-                        .foregroundStyle(.white)
-                }
+        VStack(alignment: .leading, spacing: m.sectionSpacing) {
+            HStack(alignment: .bottom, spacing: 16) {
+                RallyPageHeader(
+                    eyebrow: "Live TV",
+                    title: "\(store.channels.count) channels",
+                    subtitle: "Browse your provider lineup with current and upcoming programming."
+                )
                 Spacer()
                 Button("Reload") { Task { await reloadChannels() } }
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(RallyFont.font(size: m.bodySize, weight: .semibold))
                     .buttonStyle(.plain)
-                    .foregroundStyle(RallyTheme.rallyCyan)
+                    .foregroundStyle(RallyTheme.textPrimary)
                 TextField("Search channels", text: $query)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
+                    .frame(width: m.layout == .compact ? 220 : 280)
             }
-            .padding(.horizontal, m.hPad).padding(.top, 10)
+            Picker("Category", selection: $category) {
+                Text("All Channels").tag("All Channels")
+                ForEach(Array(Set(store.channels.map(\.category))).sorted(), id: \.self) { Text($0).tag($0) }
+            }.frame(width: 260)
+            if let error = store.channelError { Text(error).font(.callout).foregroundStyle(RallyTheme.textSecondary) }
             if store.channels.isEmpty {
-                VStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 16) {
                     if channelsLoading {
                         ProgressView("Loading your channels…")
                     } else if providerConfigured {
-                        Text("Live TV is unavailable").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                        Text("The schedule is safe — the portal didn't answer. Try again.")
-                            .font(.callout).foregroundStyle(RallyTheme.textSecondary)
+                        RallyEmptyState(
+                            eyebrow: "Live TV unavailable",
+                            title: "The portal did not answer.",
+                            message: "Your sports schedule is safe. Try the provider connection again."
+                        )
                         Button("Try Again") { Task { await reloadChannels() } }
                     } else {
-                        Text("No channels loaded").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                        Text("Configure the IPTV provider in Settings, then come back.")
-                            .font(.callout).foregroundStyle(RallyTheme.textSecondary)
+                        RallyEmptyState(
+                            eyebrow: "Sources",
+                            title: "No channels loaded.",
+                            message: "Configure a Stalker, Xtream, or M3U provider in Settings to populate Live TV."
+                        )
                         Button("Open Settings") { store.show(.settings) }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(filtered.prefix(120)) { channel in
+                    LazyVStack(spacing: 10) {
+                        ForEach(filtered) { channel in
                             channelRow(channel)
                                 .onAppear { Task { await loadGuide(for: channel) } }
                         }
                     }
-                    .padding(.horizontal, m.hPad).padding(.bottom, 20)
+                    .padding(.bottom, 20)
                 }
             }
         }
-        .background { AmbientBackground() }
+        .frame(maxWidth: m.contentMaxWidth, alignment: .leading)
+        .padding(.horizontal, m.hPad)
+        .padding(.top, m.pageTopPadding)
+        .frame(maxWidth: .infinity)
         .task {
+            channelsLoading = true
             await store.ensureChannels()
+            channelsLoading = false
             await loadGuides()
         }
         .onMoveCommand { _ in }
@@ -81,7 +93,7 @@ struct TvLiveTv: View {
     @State private var channelsLoading = false
 
     private var providerConfigured: Bool {
-        !settings.portalUrl.isEmpty || !settings.xtreamServerUrl.isEmpty
+        !settings.portalUrl.isEmpty || !settings.xtreamServerUrl.isEmpty || !settings.m3uPlaylistUrl.isEmpty
     }
 
     private func reloadChannels() async {
@@ -97,35 +109,35 @@ struct TvLiveTv: View {
             HStack(spacing: 12) {
                 if let logo = channel.logoUrl, let link = URL(string: logo) {
                     AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
-                        Text(channel.number).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                        Text(channel.number).font(RallyFont.font(size: 11, weight: .bold)).foregroundStyle(.white)
                     }
                     .frame(width: 46, height: 46)
                     .background(Color.white.opacity(0.06))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else {
-                    Text(channel.number).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                    Text(channel.number).font(RallyFont.font(size: 11, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 46, height: 46)
                         .background(Color.white.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(channel.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                    Text(channel.name).font(RallyFont.font(size: 14, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                     if let guide = guides[channel.id] ?? channel.guide {
                         if let now = guide.now?.title {
-                            Text("Now · \(now)").font(.system(size: 12)).foregroundStyle(RallyTheme.rallyCyan).lineLimit(1)
+                            Text("Now · \(now)").font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textPrimary).lineLimit(1)
                         }
                         if let next = guide.next?.title {
-                            Text("Next · \(next)").font(.system(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
+                            Text("Next · \(next)").font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                         }
                     } else if loadingGuides {
-                        Text("Loading guide…").font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
+                        Text("Loading guide…").font(RallyFont.font(size: 11)).foregroundStyle(RallyTheme.textTertiary)
                     }
                 }
                 Spacer()
-                Text(channel.category).font(.system(size: 10, weight: .semibold)).tracking(0.8)
+                Text(channel.category).font(RallyFont.font(size: 10, weight: .semibold)).tracking(0.8)
                     .foregroundStyle(RallyTheme.textSecondary)
-                Image(systemName: "play.circle.fill").font(.system(size: 22))
-                    .foregroundStyle(RallyTheme.rallyCyan)
+                Image(systemName: "play.circle.fill").font(RallyFont.font(size: 22))
+                    .foregroundStyle(RallyTheme.textPrimary)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Color.white.opacity(0.05))

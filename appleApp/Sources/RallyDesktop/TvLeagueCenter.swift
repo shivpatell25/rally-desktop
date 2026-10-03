@@ -2,7 +2,7 @@ import RallyCore
 import SwiftUI
 
 /// League center. Mirrors LeagueHubDashboard: eyebrow + title + counts,
-/// Back/Games/Standings tabs, day pager, portrait game cards.
+/// Back/Games/Standings tabs, day pager, compact matchup rows.
 struct TvLeagueCenter: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     var league: String
@@ -13,6 +13,8 @@ struct TvLeagueCenter: View {
     @State private var dayError: String?
     @State private var loadingDay = false
     @State private var standings: [StandingEntry] = []
+    @State private var teams: [Team] = []
+    @State private var loadingTeams = true
     @State private var redZone: IptvChannel?
     @FocusState private var focus: String?
 
@@ -46,13 +48,13 @@ struct TvLeagueCenter: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("RALLY SPORTS · LEAGUE CENTER")
-                            .font(.system(size: 11, weight: .bold)).tracking(1.2)
-                            .foregroundStyle(RallyTheme.rallyCyan)
+                            .font(RallyFont.font(size: m.eyebrowSize, weight: .bold)).tracking(1.2)
+                            .foregroundStyle(RallyTheme.textPrimary)
                         Text(Artwork.displayLeague(league))
-                            .font(.system(size: 40, weight: .black)).tracking(-0.7)
+                            .font(RallyFont.font(size: m.pageTitleSize + 8, weight: .black)).tracking(-0.7)
                             .foregroundStyle(.white)
                         Text("\(leagueEvents.count) games · \(teamCount) teams")
-                            .font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                            .font(RallyFont.font(size: m.bodySize)).foregroundStyle(RallyTheme.textSecondary)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 8) {
@@ -65,6 +67,7 @@ struct TvLeagueCenter: View {
                             if showPlayoffs {
                                 leagueButton("Playoffs", primary: tab == 2) { tab = 2 }
                             }
+                            leagueButton("Teams", primary: tab == 3) { tab = 3 }
                         }
                         if league.lowercased() == "nfl", let rz = redZone {
                             leagueButton("● RedZone", primary: true) {
@@ -73,9 +76,9 @@ struct TvLeagueCenter: View {
                         }
                     }
                 }
-                .padding(.horizontal, m.hPad).padding(.top, 10)
+                .padding(.horizontal, m.hPad).padding(.top, m.pageTopPadding)
                 if tab == 0 {
-                    Text("GAMES").font(.system(size: 15, weight: .black)).tracking(1.6)
+                    Text("GAMES").font(RallyFont.font(size: m.sectionTitleSize, weight: .black)).tracking(1.6)
                         .foregroundStyle(.white).padding(.horizontal, m.hPad)
                     dayPager
                     if loadingDay {
@@ -89,26 +92,26 @@ struct TvLeagueCenter: View {
                                 .font(.callout).foregroundStyle(RallyTheme.textSecondary)
                                 .padding(.horizontal, m.hPad)
                         } else {
-                            portraitGrid(day)
+                            matchupRows(day)
                         }
                     } else {
-                        portraitGrid(leagueEvents)
+                        matchupRows(leagueEvents)
                     }
                     if !leagueChannels.isEmpty {
-                        Text("CHANNELS").font(.system(size: 15, weight: .black)).tracking(1.6)
+                        Text("CHANNELS").font(RallyFont.font(size: m.sectionTitleSize, weight: .black)).tracking(1.6)
                             .foregroundStyle(.white).padding(.horizontal, m.hPad).padding(.top, 6)
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
                                 ForEach(leagueChannels) { channel in
                                     Button { store.show(.player(event: nil, channel: channel)) } label: {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(channel.name).font(.system(size: 13, weight: .semibold))
+                                            Text(channel.name).font(RallyFont.font(size: 13, weight: .semibold))
                                                 .foregroundStyle(.white).lineLimit(1)
                                             if let now = channel.guide?.now?.title {
-                                                Text(now).font(.system(size: 11))
-                                                    .foregroundStyle(RallyTheme.rallyCyan).lineLimit(1)
+                                                Text(now).font(RallyFont.font(size: 11))
+                                                    .foregroundStyle(RallyTheme.textPrimary).lineLimit(1)
                                             } else {
-                                                Text(channel.category).font(.system(size: 11))
+                                                Text(channel.category).font(RallyFont.font(size: 11))
                                                     .foregroundStyle(RallyTheme.textSecondary).lineLimit(1)
                                             }
                                         }
@@ -125,22 +128,25 @@ struct TvLeagueCenter: View {
                         }
                     }
                 } else if tab == 1 {
-                    Text("STANDINGS").font(.system(size: 15, weight: .black)).tracking(1.6)
+                    Text("STANDINGS").font(RallyFont.font(size: m.sectionTitleSize, weight: .black)).tracking(1.6)
                         .foregroundStyle(.white).padding(.horizontal, m.hPad)
-                    standingsGrid
+                    standingsRows
+                } else if tab == 3 {
+                    teamDirectory
                 } else {
-                    Text("PLAYOFFS").font(.system(size: 15, weight: .black)).tracking(1.6)
+                    Text("PLAYOFFS").font(RallyFont.font(size: m.sectionTitleSize, weight: .black)).tracking(1.6)
                         .foregroundStyle(.white).padding(.horizontal, m.hPad)
                     if !postseasonGames.isEmpty {
-                        portraitGrid(postseasonGames)
+                        matchupRows(postseasonGames)
                     } else {
-                        playoffGrid
+                        playoffRows
                     }
                 }
             }
-            .padding(.bottom, 18)
+            .frame(maxWidth: m.contentMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 28)
         }
-        .background { AmbientBackground() }
         .task { await loadHub() }
         .task(id: dayOffset) { await loadDay() }
     }
@@ -148,24 +154,24 @@ struct TvLeagueCenter: View {
     private var dayPager: some View {
         HStack(spacing: 10) {
             Button("‹") { dayOffset -= 1 }.buttonStyle(.plain)
-                .font(.system(size: 20, weight: .bold)).foregroundStyle(RallyTheme.textSecondary)
+                .font(RallyFont.font(size: 20, weight: .bold)).foregroundStyle(RallyTheme.textSecondary)
             ForEach(-1...1, id: \.self) { off in
                 let title = off == -1 ? "YESTERDAY" : off == 0 ? "TODAY" : "TOMORROW"
                 Button(title) { dayOffset = off }.buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .bold)).tracking(0.8)
+                    .font(RallyFont.font(size: 12, weight: .bold)).tracking(0.8)
                     .foregroundStyle(dayOffset == off ? .black : RallyTheme.textSecondary)
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(dayOffset == off ? RallyTheme.offWhite : Color.white.opacity(0.06))
-                    .clipShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             Button("›") { dayOffset += 1 }.buttonStyle(.plain)
-                .font(.system(size: 20, weight: .bold)).foregroundStyle(RallyTheme.textSecondary)
+                .font(RallyFont.font(size: 20, weight: .bold)).foregroundStyle(RallyTheme.textSecondary)
             if dayOffset != 0 {
                 Button("Today") { dayOffset = 0 }.buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .bold)).foregroundStyle(RallyTheme.rallyCyan)
+                    .font(RallyFont.font(size: 12, weight: .bold)).foregroundStyle(RallyTheme.textPrimary)
             }
             if abs(dayOffset) > 1 {
-                Text(dayLabel).font(.system(size: 12)).foregroundStyle(RallyTheme.textSecondary)
+                Text(dayLabel).font(RallyFont.font(size: 12)).foregroundStyle(RallyTheme.textSecondary)
             }
         }
         .padding(.horizontal, m.hPad)
@@ -178,13 +184,16 @@ struct TvLeagueCenter: View {
         return fmt.string(from: date).uppercased()
     }
     private func loadHub() async {
-        guard let entry = EspnClient.leagues.first(where: { $0.league == league }) else { return }
+        guard let entry = EspnClient.leagues.first(where: { $0.league == league }) else { loadingTeams = false; return }
+        async let catalog = store.espnClient.fetchTeams(sport: entry.sport, league: entry.path)
         async let table = store.espnClient.fetchStandings(sport: entry.sport, league: entry.path)
         await store.ensureChannels()
         let official = await table
         // Off-season the endpoint publishes no table (link only) — fall back
         // to in-feed records so the tab survives instead of vanishing.
         standings = official.isEmpty ? inFeedStandings() : official
+        teams = await catalog
+        loadingTeams = false
         redZone = LeagueHub.redZoneChannel(in: store.channels)
     }
 
@@ -202,205 +211,174 @@ struct TvLeagueCenter: View {
     }
 
     private func loadDay() async {
+        let requestedOffset = dayOffset
         dayError = nil
-        guard dayOffset != 0,
-              let entry = EspnClient.leagues.first(where: { $0.league == league }) else {
-            dayEvents = nil
+        guard let entry = EspnClient.leagues.first(where: { $0.league == league }) else { dayEvents = []; return }
+        if LaunchArgs.visualFixture {
+            let date = Calendar.current.date(byAdding: .day, value: dayOffset, to: Date()) ?? Date()
+            dayEvents = leagueEvents.filter { Calendar.current.isDate($0.startTime, inSameDayAs: date) }
             return
         }
         loadingDay = true
-        defer { loadingDay = false }
+        defer { if dayOffset == requestedOffset && !Task.isCancelled { loadingDay = false } }
         let date = Calendar.current.date(byAdding: .day, value: dayOffset, to: Date()) ?? Date()
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd"
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = Calendar.current.timeZone
         do {
-            dayEvents = try await EspnClient().fetchScoreboard(sport: entry.sport, league: entry.path,
+            let events = try await store.espnClient.fetchScoreboard(sport: entry.sport, league: entry.path,
                 domainLeague: league, dates: fmt.string(from: date))
+            guard !Task.isCancelled, dayOffset == requestedOffset else { return }
+            dayEvents = events.filter { Calendar.current.isDate($0.startTime, inSameDayAs: date) }
         } catch {
+            guard !Task.isCancelled, dayOffset == requestedOffset else { return }
             // No silent wrong-day fallback: say so and keep Today visible.
             dayEvents = nil
             dayError = "Couldn't load that date. Check your connection and try again."
         }
     }
 
-    private func portraitGrid(_ events: [SportEvent]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
-                ForEach(events) { event in
-                    TvPortraitCard(event: event, focus: $focus)
-                }
+    private func matchupRows(_ events: [SportEvent]) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(events.sorted { $0.startTime < $1.startTime }) { event in
+                RallyEventRow(event: event)
             }
-            .padding(.horizontal, m.hPad).padding(.vertical, 6)
-        }
+        }.padding(.horizontal, m.hPad)
     }
 
-    private var standingsGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-            ForEach(standings) { row in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("STANDING").font(.system(size: 9, weight: .bold)).tracking(0.8)
-                        .foregroundStyle(RallyTheme.textTertiary)
-                    Text(row.name).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                    Text(row.recordLine).font(.system(size: 12)).foregroundStyle(RallyTheme.rallyCyan)
+    private var teamDirectory: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            RallySectionTitle(title: "Teams")
+            if loadingTeams { ProgressView("Loading teams…") }
+            else if teams.isEmpty {
+                RallyEmptyState(eyebrow: league, title: "Teams unavailable", message: "The league has not published its team directory. Try again to reconnect.")
+                Button("Try Again") { loadingTeams = true; Task { await loadHub() } }.buttonStyle(RallyActionStyle())
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
+                    ForEach(teams) { team in
+                        Button {
+                            store.show(.team(FavoriteTeam(id: team.id, league: league, name: team.name, abbreviation: team.abbreviation, logoUrl: team.logoUrl)))
+                        } label: {
+                            VStack(spacing: 14) {
+                                RallyTeamLogo(team: team, size: 64)
+                                Text(team.name).font(RallyFont.font(size: 14, weight: .medium)).multilineTextAlignment(.center).lineLimit(2)
+                            }.frame(maxWidth: .infinity).frame(height: 150)
+                                .background(RallyTheme.surfaceRaised.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                        }.buttonStyle(.plain).help("Open " + team.name)
+                    }
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RallyTheme.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
             }
-        }
-        .padding(.horizontal, m.hPad)
+        }.padding(.horizontal, m.hPad)
     }
 
-    private var playoffGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+    private var standingsRows: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(standings) { row in standingRow(row) }
+        }.padding(.horizontal, m.hPad)
+    }
+
+    private var playoffRows: some View {
+        LazyVStack(spacing: 0) {
             ForEach(Array(playoffSeeds.enumerated()), id: \.element.id) { index, row in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("SEED \(index + 1)").font(.system(size: 9, weight: .bold)).tracking(0.8)
-                        .foregroundStyle(RallyTheme.textTertiary)
-                    Text(row.name).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                    Text(row.recordLine).font(.system(size: 12)).foregroundStyle(RallyTheme.rallyCyan)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RallyTheme.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(RallyTheme.glassBorder, lineWidth: 1))
+                standingRow(row, seed: index + 1)
             }
-        }
-        .padding(.horizontal, m.hPad)
+        }.padding(.horizontal, m.hPad)
+    }
+
+    private func standingRow(_ row: StandingEntry, seed: Int? = nil) -> some View {
+        Button {
+            store.show(.team(FavoriteTeam(id: row.teamId, league: league, name: row.name,
+                                         abbreviation: row.abbreviation, logoUrl: row.logoUrl)))
+        } label: {
+            HStack(spacing: 14) {
+                if let seed {
+                    Text("\(seed)").font(RallyFont.font(size: 13, weight: .semibold))
+                        .foregroundStyle(RallyTheme.textSecondary).frame(width: 24)
+                }
+                RallyTeamLogo(team: Team(id: row.teamId, name: row.name,
+                                        abbreviation: row.abbreviation, logoUrl: row.logoUrl), size: 32)
+                Text(row.name).font(RallyFont.font(size: 16, weight: .semibold))
+                    .foregroundStyle(.white).frame(maxWidth: .infinity, alignment: .leading)
+                Text(row.recordLine).font(RallyFont.font(size: 14))
+                    .foregroundStyle(RallyTheme.textSecondary).frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(RallyTheme.textTertiary)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 16).contentShape(Rectangle())
+            .overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
+        }.buttonStyle(.plain).help("Open " + row.name)
     }
 
     private func leagueButton(_ label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label).font(.system(size: 14, weight: .semibold))
+            Text(label).font(RallyFont.font(size: 14, weight: .semibold))
                 .foregroundStyle(primary ? RallyTheme.deepNavy : RallyTheme.offWhite)
                 .padding(.horizontal, 20).padding(.vertical, 10)
                 .background(primary ? RallyTheme.offWhite : RallyTheme.surfaceRaised)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(primary ? Color.white.opacity(0.72) : RallyTheme.glassBorder, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(primary ? Color.white.opacity(0.72) : RallyTheme.glassBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 }
 
-/// Portrait game card. Mirrors AppleTvStadiumCard (240x360 proportions).
-struct TvPortraitCard: View {
-    @Environment(\.tvMetrics) private var m: TvMetrics
-    var event: SportEvent
-    var focus: FocusState<String?>.Binding
-    @EnvironmentObject var store: RallyStore
-    private var id: String { "portrait-\(event.id)" }
-    private var isLive: Bool { event.status == .live || event.status == .halftime }
-    private var isFinal: Bool { event.status == .finished }
-    var body: some View {
-        Button { store.show(.eventDetail(event)) } label: {
-            ZStack {
-                if let img = tvArt(Artwork.shelfBackdrop(event: event)) {
-                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
-                }
-                LinearGradient(colors: [Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.65),
-                                        Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.32),
-                                        Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.85),
-                                        RallyTheme.deepNavy],
-                               startPoint: .top, endPoint: .bottom)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(((event.gameStatusDetail?.isEmpty == false ? event.gameStatusDetail : nil)
-                        ?? Artwork.displayLeague(event.league)).uppercased())
-                        .font(.system(size: 11, weight: .bold)).tracking(0.9)
-                        .foregroundStyle(RallyTheme.textSecondary)
-                    Spacer()
-                    Spacer()
-                    HStack(spacing: 0) {
-                        portraitLogo(event.awayTeam?.logoUrl, event.awayTeam?.abbreviation)
-                        Spacer(minLength: 8)
-                        if isLive || isFinal {
-                            VStack(spacing: 2) {
-                                Text(event.scoreAway.map(String.init) ?? "").font(.system(size: 30, weight: .black)).foregroundStyle(.white)
-                                Rectangle().fill(Color.white.opacity(0.4)).frame(width: 24, height: 1)
-                                Text(event.scoreHome.map(String.init) ?? "").font(.system(size: 30, weight: .black)).foregroundStyle(.white)
-                            }
-                        } else {
-                            Text("AT").font(.system(size: 11, weight: .bold)).tracking(1)
-                                .foregroundStyle(RallyTheme.textTertiary)
-                        }
-                        Spacer(minLength: 8)
-                        portraitLogo(event.homeTeam?.logoUrl, event.homeTeam?.abbreviation)
-                    }
-                    .frame(width: m.s(218))
-                    Spacer()
-                    Text(event.awayTeam?.name ?? "TBD").font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(.white).lineLimit(1)
-                    Text("at \(event.homeTeam?.name ?? "TBD")").font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(.white).lineLimit(1)
-                    if let venue = event.venue, !venue.isEmpty {
-                        Text(venue).font(.system(size: 11)).foregroundStyle(RallyTheme.textTertiary)
-                            .padding(.top, 8)
-                    }
-                }
-                .padding(16)
-            }
-            .frame(width: m.portraitCard.width, height: m.portraitCard.height)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .rallyFocusRing(active: focus.wrappedValue == id, radius: 10)
-            .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-                .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
-        }
-        .buttonStyle(.plain)
-        .focused(focus, equals: id)
-    }
-
-    private func portraitLogo(_ url: String?, _ abbr: String?) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(red: 15/255, green: 23/255, blue: 36/255, opacity: 0.65))
-                .frame(width: m.s(74), height: m.s(74))
-            if let url, let link = URL(string: url) {
-                AsyncImage(url: link) { img in img.resizable().aspectRatio(contentMode: .fit) } placeholder: {
-                    Text((abbr ?? "TBD").prefix(3)).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                }
-                .frame(width: m.s(62), height: m.s(62))
-            } else {
-                Text((abbr ?? "TBD").prefix(3)).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-            }
-        }
-    }
-}
-
-/// Leagues directory. Mirrors LeaguesScreen: header plus five-at-a-time
-/// directory cards routing into the league center.
+/// Responsive league directory. Cards flow into additional rows instead of
+/// overflowing the native window.
 struct TvLeaguesHome: View {
     @Environment(\.tvMetrics) private var m: TvMetrics
     @EnvironmentObject var store: RallyStore
     @FocusState private var focus: String?
-    @State private var page = 0
+
+    private var columnCount: Int {
+        switch m.layout {
+        case .compact: 3
+        case .standard: 5
+        case .wide: 5
+        }
+    }
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(minimum: 180), spacing: m.cardSpacing), count: columnCount)
+    }
+    private var cardSize: CGSize {
+        let width = (m.contentWidth - m.cardSpacing * CGFloat(columnCount - 1)) / CGFloat(columnCount)
+        return CGSize(width: width, height: width * 0.66)
+    }
+
     var body: some View {
         if let pending = store.pendingLeague {
-            TvLeagueCenter(league: pending)
+            if ["Soccer", "Tennis", "UFC"].contains(pending) { RallySportDirectory(sport: pending) }
+            else { TvLeagueCenter(league: pending) }
         } else {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("LEAGUES").font(.system(size: 11, weight: .bold)).tracking(1.5)
-                        .foregroundStyle(RallyTheme.rallyCyan)
-                    Text("Every sport. One starting point.").font(.system(size: 27, weight: .black)).tracking(-0.6)
-                        .foregroundStyle(.white)
-                    Text("Five leagues at a time. Open one for games, standings, and channels.").font(.system(size: 11))
-                        .foregroundStyle(RallyTheme.textSecondary)
+            ScrollViewReader { reader in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: m.sectionSpacing) {
+                        RallyPageHeader(
+                            eyebrow: "Leagues",
+                            title: "Leagues",
+                            subtitle: "Open a league for games, standings, channels, and postseason coverage."
+                        )
+                        .id("leagues-top")
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: m.cardSpacing) {
+                            ForEach(store.leagueShelves, id: \.title) { shelf in
+                                TvDirectoryCard(title: shelf.title, events: shelf.events,
+                                                focus: $focus, size: cardSize) {
+                                    store.pendingLeague = shelf.title
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: m.contentMaxWidth, alignment: .leading)
+                    .padding(.horizontal, m.hPad)
+                    .padding(.top, m.pageTopPadding)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, m.hPad).padding(.top, 12)
-                .frame(height: 74, alignment: .topLeading)
-                PagedShelf(title: nil as String?, items: store.leagueShelves, pageSize: 5, aspect: 1.0,
-                           idFor: { $0.title }, focus: $focus, page: $page) { shelf, size, focus in
-                    TvDirectoryCard(title: shelf.title, events: shelf.events, focus: focus, size: size) {
-                        store.pendingLeague = shelf.title
+                .onAppear {
+                    guard LaunchArgs.visualFixture else { return }
+                    DispatchQueue.main.async {
+                        reader.scrollTo("leagues-top", anchor: .top)
                     }
                 }
-                .padding(.horizontal, m.hPad)
-                Spacer(minLength: 0)
             }
-            .background { AmbientBackground() }
         }
     }
 }
@@ -409,61 +387,28 @@ struct TvDirectoryCard: View {
     var title: String
     var events: [SportEvent]
     var focus: FocusState<String?>.Binding
-    var size: CGSize?
+    var size: CGSize
     @Environment(\.tvMetrics) private var m: TvMetrics
-    @EnvironmentObject var store: RallyStore
+    @State private var hovered = false
     var onSelect: () -> Void = {}
     private var id: String { "dir-\(title)" }
     private var hasLive: Bool { events.contains { $0.status == .live || $0.status == .halftime } }
+    private var active: Bool { focus.wrappedValue == id || hovered }
+
     var body: some View {
         Button(action: onSelect) {
-            ZStack {
-                if let img = tvArt(Artwork.leagueBackdrop(league: title)) {
-                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
-                }
-                LinearGradient(colors: [Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.18),
-                                        Color(red: 5/255, green: 8/255, blue: 15/255, opacity: 0.9)],
-                               startPoint: .top, endPoint: .bottom)
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("LEAGUE CENTER").font(.system(size: 9, weight: .bold)).tracking(0.8)
-                            .foregroundStyle(RallyTheme.textSecondary)
-                        Spacer(minLength: 8)
-                        if hasLive {
-                            Text("● LIVE").font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(RallyTheme.liveRed)
-                        }
-                    }
-                    .frame(width: (size ?? CGSize(width: 220, height: 220)).width - 30)
-                    Spacer()
-                    if let mark = Artwork.leagueMark(league: title), let img = tvArt(mark) {
-                        Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                            .frame(width: 92, height: 72)
-                    } else {
-                        Text(Artwork.leagueShortMark(league: title))
-                            .font(.system(size: 28, weight: .black)).tracking(1)
-                            .foregroundStyle(RallyTheme.offWhite)
-                            .frame(height: 72)
-                    }
-                    Spacer()
-                    Text(Artwork.displayLeague(title).uppercased())
-                        .font(.system(size: 14, weight: .black)).tracking(0.5)
-                        .foregroundStyle(.white).lineLimit(1)
-                    Text(events.isEmpty ? "OPEN LEAGUE CENTER" : "\(events.count) GAMES")
-                        .font(.system(size: 9, weight: .bold)).tracking(0.7)
-                        .foregroundStyle(focus.wrappedValue == id ? RallyTheme.rallyCyan : RallyTheme.textSecondary)
-                }
-                .padding(15)
+            VStack(spacing: 20) {
+                RallyLeagueMark(league: title, size: 66)
+                Text(Artwork.displayLeague(title)).font(RallyFont.font(size: 20, weight: .medium)).lineLimit(1)
+                if hasLive { Text("● LIVE").font(RallyFont.font(size: 10, weight: .semibold)).foregroundStyle(RallyTheme.liveRed) }
             }
-            .frame(width: (size ?? CGSize(width: 220, height: 220)).width,
-                   height: (size ?? CGSize(width: 220, height: 220)).height)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .rallyFocusRing(active: focus.wrappedValue == id, radius: 10,
-                               inactiveColor: Color(red: 56/255, green: 120/255, blue: 148/255, opacity: 0.22))
-            .scaleEffect(focus.wrappedValue == id ? 1.025 : 1.0)
-            .rallyAnimation(.spring(response: 0.3, dampingFraction: 0.75), value: focus.wrappedValue)
+            .frame(width: size.width, height: max(185, size.height))
+            .foregroundStyle(.white).background(RallyTheme.surfaceBase.opacity(active ? 0.8 : 0.5), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(active ? Color.white.opacity(0.5) : .clear, lineWidth: 0.7))
+            .offset(y: hovered ? -2 : 0)
         }
         .buttonStyle(.plain)
         .focused(focus, equals: id)
+        .onHover { hovered = $0 }
     }
 }
