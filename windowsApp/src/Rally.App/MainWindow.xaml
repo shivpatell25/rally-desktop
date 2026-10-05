@@ -1,21 +1,17 @@
-<Window
-    x:Class="Rally.App.MainWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
-    Title="Rally">
-    <controls:NavigationView x:Name="Nav" IsBackButtonVisible="Collapsed"
-        SelectionChanged="Nav_SelectionChanged" Background="{StaticResource RallyBackground}">
-        <controls:NavigationView.MenuItems>
-            <controls:NavigationViewItem Content="Home" Tag="home" Icon="Home" />
-            <controls:NavigationViewItem Content="Live TV" Tag="live" Icon="Play" />
-            <controls:NavigationViewItem Content="Leagues" Tag="leagues" Icon="Library" />
-            <controls:NavigationViewItem Content="Highlights" Tag="highlights" Icon="Video" />
-            <controls:NavigationViewItem Content="My Teams" Tag="myteams" Icon="People" />
-            <controls:NavigationViewItem Content="Search" Tag="search" Icon="Find" />
-            <controls:NavigationViewItem Content="Multi-View" Tag="multi" Icon="ViewAll" />
-            <controls:NavigationViewItem Content="Settings" Tag="settings" Icon="Setting" />
-        </controls:NavigationView.MenuItems>
-        <Frame x:Name="ContentFrame" />
-    </controls:NavigationView>
+<Window x:Class="Rally.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Rally">
+    <Grid x:Name="Root" Background="#030709" RequestedTheme="Dark" XYFocusKeyboardNavigation="Enabled">
+        <Image Source="ms-appx:///Assets/rally_tv_background_v8.png" Stretch="UniformToFill" Opacity="0.42" IsHitTestVisible="False" />
+        <Canvas x:Name="VideoLayer" IsHitTestVisible="False" />
+        <Grid x:Name="Shell">
+            <Grid.RowDefinitions><RowDefinition Height="86"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Grid x:Name="TopNav" Padding="44,14,44,14" ColumnSpacing="24">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Button x:Name="LogoButton" Background="Transparent" BorderThickness="0" Padding="0" Click="Logo_Click" AutomationProperties.Name="Rally Home"><Image x:Name="NavWordmark" Source="ms-appx:///Assets/rally_wordmark.png" Width="126" Stretch="Uniform"/></Button>
+                <StackPanel x:Name="Destinations" Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <StackPanel x:Name="UtilityNav" Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"/>
+            </Grid>
+            <Frame x:Name="ContentFrame" Grid.Row="1" Background="Transparent" CacheSize="10"/>
+        </Grid>
+        <Grid x:Name="IdleVeil" Background="#A3030709" Visibility="Collapsed" IsHitTestVisible="False"><StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14"><Image Source="ms-appx:///Assets/rally_wordmark.png" Width="170" Opacity="0.75"/><TextBlock Text="Your next game awaits" Foreground="#B5BBC3" HorizontalAlignment="Center" FontSize="16"/></StackPanel></Grid>
+    </Grid>
 </Window>

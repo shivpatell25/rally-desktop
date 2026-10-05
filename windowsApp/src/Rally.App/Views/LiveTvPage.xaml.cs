@@ -1,321 +1,98 @@
-using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Xaml.Markup;
+using Microsoft.UI.Xaml.Navigation;
+using Rally.App.Design;
 using Rally.Core;
-
 namespace Rally.App.Views;
-
-// Live TV browser. 1:1 with Android IptvBrowserScreen + IptvBrowserViewModel:
-// left category rail (All + distinct categories, sports first), search by
-// name/number, "N channels · M total" counts, per-row Now/Next EPG loaded
-// lazily, catch-up badge, no-provider / empty / error states with retry.
 public sealed partial class LiveTvPage : Page
 {
-    private readonly SettingsStore _settings = new();
-    private readonly HttpClient _http = new();
-    private readonly StalkerClient _stalker;
-    private readonly XtreamClient _xtream;
-    private readonly SemaphoreSlim _guideGate = new(4, 4);
-    private readonly HashSet<string> _guideLoading = new();
-    private readonly Dictionary<string, ChannelGuide> _guideCache = new();
-    private readonly object _guideLock = new();
-    private CancellationTokenSource? _cts;
-
-    private List<IptvChannel> _all = [];
-    private string _selectedCategory = "All";
-    private string _search = "";
-
+    private readonly PageState _state;
+    private readonly ContentControl _content = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+    private readonly ContentControl _channelRows = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+    private readonly TextBlock _channelCount = RallyUi.Text("", 12, true);
+    private readonly Grid _channelBody = new() { RowSpacing = 12 };
+    private readonly TextBox _search = new() { PlaceholderText = "Search channels", Width = 290 };
+    private readonly ComboBox _category = new() { Width = 200 };
+    private List<IptvChannel> _channels = [];
+    private bool _channelMode;
+    private int _loadGeneration;
     public LiveTvPage()
     {
-        InitializeComponent();
-        _stalker = new StalkerClient(_http, _settings);
-        _xtream = new XtreamClient(_http, _settings);
-        Loaded += async (_, _) => await LoadAsync(refresh: false).ConfigureAwait(false);
-        Unloaded += (_, _) => { _cts?.Cancel(); _cts?.Dispose(); _cts = null; };
+        InitializeComponent(); NavigationCacheMode = NavigationCacheMode.Required; _state = new(this);
+        _channelBody.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _channelBody.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _channelBody.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        RallyUi.Put(_channelBody, RallyUi.Row(_search, _category, RallyUi.Button("Refresh", () => _ = Channels(true))), 0);
+        RallyUi.Put(_channelBody, _channelCount, 0, 1); RallyUi.Put(_channelBody, _channelRows, 0, 2);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_search, "Search channels");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_category, "Channel category");
+        _search.TextChanged += (_, _) => Filter(); _category.SelectionChanged += (_, _) => Filter();
+        BuildRoot();
     }
-
-    private bool HasProviderCredentials() => _settings.IptvProvider == IptvProvider.Xtream
-        ? _settings.XtreamServerUrl.Length > 0 && _settings.XtreamUsername.Length > 0
-        : _settings.PortalUrl.Length > 0;
-
-    private async Task LoadAsync(bool refresh)
+    protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
-        _cts = new CancellationTokenSource();
-        var ct = _cts.Token;
-        DispatcherQueue.TryEnqueue(() => ShowState("loading"));
-        if (!HasProviderCredentials())
-        {
-            DispatcherQueue.TryEnqueue(() => ShowState("noprovider"));
-            return;
-        }
-        List<IptvChannel> channels;
+        _state.Activate();
+        if (_channelMode) await Channels(); else await Games();
+    }
+    private void BuildRoot()
+    {
+        var body = new Grid { RowSpacing = 16 };
+        body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        RallyUi.Put(body, RallyUi.Heading("Live"), 0);
+        RallyUi.Put(body, RallyUi.Row(RallyUi.Button("Live Games", () => _ = Games()), RallyUi.Button("Live TV", () => _ = Channels())), 0, 1);
+        RallyUi.Put(body, _content, 0, 2);
+        _state.Root.Children.Add(body);
+    }
+    private async Task Games()
+    {
+        _channelMode = false; var generation = ++_loadGeneration;
+        try { var games = (await App.Data.GamesAsync(ct: _state.Token)).Where(ev => ev.Status is EventStatus.Live or EventStatus.Halftime).ToList(); if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return; _content.Content = games.Count > 0 ? RallyUi.Scroll(PageState.Events(games)) : RallyUi.Empty("No games are live right now", "Browse your live channels or recent highlights.", "Browse Live TV", () => _ = Channels()); }
+        catch (OperationCanceledException) { }
+        catch { if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return; _content.Content = RallyUi.Empty("Scores couldn't load", "Check your connection.", "Retry", () => _ = Games()); }
+    }
+    private async Task Channels(bool refresh = false)
+    {
+        _channelMode = true; var generation = ++_loadGeneration;
+        var selectedCategory = _category.SelectedItem as string;
+        _content.Content = RallyUi.Text("Loading channels…", 13, true);
         try
         {
-            channels = _settings.IptvProvider == IptvProvider.Xtream
-                ? refresh ? await _xtream.RefreshChannelsAsync(ct).ConfigureAwait(false)
-                          : await _xtream.GetChannelsAsync(ct).ConfigureAwait(false)
-                : refresh ? await _stalker.RefreshChannelsAsync(ct).ConfigureAwait(false)
-                          : await _stalker.GetChannelsAsync(ct).ConfigureAwait(false);
+            var channels = await App.Data.ChannelsAsync(refresh, _state.Token);
+            if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return;
+            _channels = channels;
+            if (_channels.Count == 0) { _content.Content = RallyUi.Empty("Add your live TV source", "Connect Stalker, Xtream, or an M3U playlist in Settings.", "Open Settings", () => App.Window?.NavigateTo("settings")); return; }
+            _category.ItemsSource = new[] { "All Channels" }.Concat(_channels.Select(c => c.Category).Distinct().Order()); _category.SelectedItem = selectedCategory is not null && _channels.Any(c => c.Category == selectedCategory) ? selectedCategory : "All Channels"; Filter(); _content.Content = _channelBody;
         }
-        catch (Exception ex)
-        {
-            var message = ex.Message;
-            DispatcherQueue.TryEnqueue(() => ShowError(message));
-            return;
-        }
-        if (ct.IsCancellationRequested) return;
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            _all = channels;
-            RebuildCategories();
-            ApplyFilter();
-        });
+        catch (OperationCanceledException) { }
+        catch { if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return; _content.Content = RallyUi.Empty("Channels couldn't load", "Check your provider settings and connection.", "Retry", () => _ = Channels(true)); }
     }
-
-    // UI thread only.
-    private void RebuildCategories()
+    private void Filter()
     {
-        var distinct = _all
-            .Select(c => string.IsNullOrWhiteSpace(c.Category) ? "Live TV" : c.Category)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var sports = distinct
-            .Where(c => c.Contains("sport", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(c => c, StringComparer.OrdinalIgnoreCase);
-        var rest = distinct
-            .Where(c => !c.Contains("sport", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(c => c, StringComparer.OrdinalIgnoreCase);
-        var cats = new List<string> { "All" };
-        cats.AddRange(sports);
-        cats.AddRange(rest);
-        if (!cats.Contains(_selectedCategory, StringComparer.OrdinalIgnoreCase)) _selectedCategory = "All";
-        Categories.ItemsSource = cats;
-        var selected = cats.FirstOrDefault(c => c.Equals(_selectedCategory, StringComparison.OrdinalIgnoreCase)) ?? "All";
-        _selectedCategory = selected;
-        if (!selected.Equals(Categories.SelectedItem as string, StringComparison.OrdinalIgnoreCase))
-            Categories.SelectedItem = selected;
+        if (_channels.Count == 0) return;
+        var category = _category.SelectedItem as string ?? "All Channels"; var query = _search.Text.Trim();
+        var rows = _channels.Where(c => (category == "All Channels" || c.Category == category) && (query.Length == 0 || c.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || c.Number.Contains(query))).ToList();
+        var list = new ListView { ItemsSource = rows, IsItemClickEnabled = true, SelectionMode = ListViewSelectionMode.None, VerticalAlignment = VerticalAlignment.Stretch };
+        list.ItemTemplate = (DataTemplate)XamlReader.Load("""
+<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><Grid Padding="10" ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="52"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Image Source="{Binding LogoUrl}" Width="44" Height="44"/><StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold"/><TextBlock Text="{Binding Guide.Now.Title}" Foreground="#A6ADB7" FontSize="12"/><TextBlock Text="{Binding Category}" Foreground="#A6ADB7" FontSize="11"/></StackPanel></Grid></DataTemplate>
+""");
+        list.ContainerContentChanging += (_, args) => { if (args.Item is IptvChannel channel) Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(args.ItemContainer, channel.Name); };
+        list.ItemClick += (_, e) => { if (e.ClickedItem is IptvChannel channel) PageState.Go(typeof(PlayerPage), channel); };
+        _channelCount.Text = $"{rows.Count} channels · {_channels.Count} total"; _channelRows.Content = list;
+        _ = Guides(rows.Take(16).ToList(), list);
     }
-
-    // MUST run on the UI thread (creates BitmapImage rows, touches ItemsSource).
-    private void ApplyFilter()
+    private async Task Guides(List<IptvChannel> channels, ListView list)
     {
-        var search = _search.Trim();
-        var rows = _all
-            .Where(c => (_selectedCategory.Equals("All", StringComparison.OrdinalIgnoreCase) ||
-                         c.Category.Equals(_selectedCategory, StringComparison.OrdinalIgnoreCase)) &&
-                        (search.Length == 0 ||
-                         c.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                         c.Number.Contains(search, StringComparison.OrdinalIgnoreCase)))
-            .Select(c =>
-            {
-                ChannelGuide? cached;
-                lock (_guideLock) _guideCache.TryGetValue(c.Id, out cached);
-                return new ChannelRow(c, cached);
-            })
-            .ToList();
-        CategoryTitle.Text = _selectedCategory;
-        Counts.Text = $"{rows.Count} channels · {_all.Count} total";
-        Channels.ItemsSource = rows;
-        if (_all.Count == 0)
-        {
-            ShowEmpty("No channels were returned", "Retry, or check your portal details in Settings.", showRetry: true);
-        }
-        else if (rows.Count == 0)
-        {
-            ShowEmpty(search.Length == 0 ? "No channels in this category" : $"No results for \u201c{search}\u201d",
-                "Try another category or search term.", showRetry: false);
-        }
-        else
-        {
-            ShowState("list");
-            foreach (var row in rows.Take(30)) MaybeLoadGuide(row);
-        }
-    }
-
-    private void MaybeLoadGuide(ChannelRow row)
-    {
-        if (row.GuideLoaded) return;
-        lock (_guideLock)
-        {
-            if (_guideCache.TryGetValue(row.Channel.Id, out var cached))
-            {
-                DispatcherQueue.TryEnqueue(() => row.SetGuide(cached));
-                return;
-            }
-            if (!_guideLoading.Add(row.Channel.Id)) return;
-        }
-        var ct = _cts?.Token ?? CancellationToken.None;
-        _ = LoadGuideAsync(row, ct);
-    }
-
-    private async Task LoadGuideAsync(ChannelRow row, CancellationToken ct)
-    {
-        var entered = false;
         try
         {
-            await _guideGate.WaitAsync(ct).ConfigureAwait(false);
-            entered = true;
-            ChannelGuide? guide;
-            try
-            {
-                guide = _settings.IptvProvider == IptvProvider.Xtream
-                    ? await _xtream.GetGuideAsync(row.Channel.Id, ct).ConfigureAwait(false)
-                    : await _stalker.GetGuideAsync(row.Channel.Id, ct).ConfigureAwait(false);
-            }
-            catch
-            {
-                return; // per-row guide failure is not fatal; row keeps its category fallback text
-            }
-            if (guide is null || ct.IsCancellationRequested) return;
-            lock (_guideLock) _guideCache[row.Channel.Id] = guide;
-            DispatcherQueue.TryEnqueue(() => row.SetGuide(guide));
+            using var gate = new SemaphoreSlim(4);
+            var updated = await Task.WhenAll(channels.Select(async channel => { await gate.WaitAsync(_state.Token); try { return channel with { Guide = await App.Data.GuideAsync(channel, _state.Token) }; } catch (OperationCanceledException) { return channel; } catch { return channel; } finally { gate.Release(); } }));
+            if (_state.Token.IsCancellationRequested || !ReferenceEquals(_channelRows.Content, list)) return;
+            foreach (var channel in updated) { var index = _channels.FindIndex(c => c.Id == channel.Id); if (index >= 0) _channels[index] = channel; }
+            list.ItemsSource = ((IEnumerable<IptvChannel>)list.ItemsSource).Select(c => updated.FirstOrDefault(u => u.Id == c.Id) ?? c).ToList();
         }
-        catch (OperationCanceledException)
-        {
-        }
-        finally
-        {
-            if (entered) _guideGate.Release();
-            lock (_guideLock) _guideLoading.Remove(row.Channel.Id);
-        }
-    }
-
-    // UI thread only.
-    private void ShowState(string state)
-    {
-        Spinner.IsActive = state == "loading";
-        LoadingState.Visibility = state == "loading" ? Visibility.Visible : Visibility.Collapsed;
-        NoProviderState.Visibility = state == "noprovider" ? Visibility.Visible : Visibility.Collapsed;
-        ErrorState.Visibility = state == "error" ? Visibility.Visible : Visibility.Collapsed;
-        EmptyState.Visibility = state == "empty" ? Visibility.Visible : Visibility.Collapsed;
-        Channels.Visibility = state == "list" ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void ShowError(string message)
-    {
-        ErrorMessage.Text = message;
-        ShowState("error");
-    }
-
-    private void ShowEmpty(string title, string subtitle, bool showRetry)
-    {
-        EmptyTitle.Text = title;
-        EmptySubtitle.Text = subtitle;
-        EmptyRetry.Visibility = showRetry ? Visibility.Visible : Visibility.Collapsed;
-        ShowState("empty");
-    }
-
-    private void Categories_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Categories.SelectedItem is string cat &&
-            !cat.Equals(_selectedCategory, StringComparison.OrdinalIgnoreCase))
-        {
-            _selectedCategory = cat;
-            ApplyFilter();
-        }
-    }
-
-    private void Search_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
-    {
-        if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput) return;
-        _search = sender.Text ?? "";
-        ApplyFilter();
-    }
-
-    private void Channels_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Channels.SelectedItem is ChannelRow row)
-        {
-            Channels.SelectedItem = null;
-            // Agreed nav contract: PlayerPage accepts object — IptvChannel here for
-            // direct play via StreamResolver.ChannelCandidates (PlayerOwner implements
-            // the IptvChannel branch). No synthetic SportEvent.
-            Frame.Navigate(typeof(PlayerPage), row.Channel);
-        }
-    }
-
-    private void Channels_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
-    {
-        if (args.Item is ChannelRow row) MaybeLoadGuide(row);
-    }
-
-    private async void Refresh_Click(object sender, RoutedEventArgs e) =>
-        await LoadAsync(refresh: true).ConfigureAwait(false);
-
-    public sealed class ChannelRow : INotifyPropertyChanged
-    {
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        public IptvChannel Channel { get; }
-        public string Number => Channel.Number;
-        public string Name => Channel.Name;
-        public ImageSource? LogoImage { get; }
-        public string Fallback { get; }
-        public string QualityBadge { get; }
-        public Visibility QualityVisibility => QualityBadge.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        public Visibility CatchUpVisibility => Channel.SupportsCatchUp ? Visibility.Visible : Visibility.Collapsed;
-
-        private string _nowText = "";
-        public string NowText
-        {
-            get => _nowText;
-            private set
-            {
-                _nowText = value;
-                OnPropertyChanged(nameof(NowText));
-                OnPropertyChanged(nameof(NowVisibility));
-            }
-        }
-        public Visibility NowVisibility => _nowText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-
-        private string _nextText;
-        public string NextText
-        {
-            get => _nextText;
-            private set
-            {
-                _nextText = value;
-                OnPropertyChanged(nameof(NextText));
-            }
-        }
-
-        public bool GuideLoaded { get; private set; }
-
-        public ChannelRow(IptvChannel channel, ChannelGuide? guide = null)
-        {
-            Channel = channel;
-            LogoImage = TryLogo(channel.LogoUrl);
-            Fallback = channel.Number.Length > 0
-                ? channel.Number
-                : channel.Name.Length >= 2 ? channel.Name[..2].ToUpperInvariant() : channel.Name;
-            QualityBadge = Quality.Parse(channel.Name).Resolution ?? "";
-            _nextText = CategoryFallback(channel);
-            if (guide is not null) SetGuide(guide);
-        }
-
-        // Must be called on the UI thread (raises bindings).
-        public void SetGuide(ChannelGuide guide)
-        {
-            GuideLoaded = true;
-            if (guide.Now?.Title is { Length: > 0 } now) NowText = $"Now · {now}";
-            NextText = guide.Next?.Title is { Length: > 0 } next ? $"Next · {next}" : CategoryFallback(Channel);
-        }
-
-        private static string CategoryFallback(IptvChannel c) =>
-            string.IsNullOrWhiteSpace(c.Category) ? "Live TV" : c.Category;
-
-        private static ImageSource? TryLogo(string? url)
-        {
-            if (string.IsNullOrWhiteSpace(url)) return null;
-            try { return new BitmapImage(new Uri(url.Trim(), UriKind.Absolute)); }
-            catch { return null; }
-        }
-
-        private void OnPropertyChanged(string name) =>
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        catch (OperationCanceledException) { }
     }
 }

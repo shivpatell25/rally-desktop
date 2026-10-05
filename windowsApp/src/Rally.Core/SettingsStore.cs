@@ -15,8 +15,17 @@ public sealed class SettingsStore
     private readonly string _dir;
     private readonly string _prefsPath;
     private readonly string _secretsPath;
-    private Dictionary<string, JsonElement> _prefs = new();
-    private Dictionary<string, string> _secrets = new();
+    private sealed class SharedState
+    {
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonElement> Preferences = new();
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Secrets = new();
+        public readonly object Gate = new();
+        public bool Loaded;
+    }
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SharedState> States = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SharedState _state;
+    private System.Collections.Concurrent.ConcurrentDictionary<string, JsonElement> _prefs => _state.Preferences;
+    private System.Collections.Concurrent.ConcurrentDictionary<string, string> _secrets => _state.Secrets;
 
     public SettingsStore(string? dir = null)
     {
@@ -24,7 +33,11 @@ public sealed class SettingsStore
         Directory.CreateDirectory(_dir);
         _prefsPath = Path.Combine(_dir, "settings.json");
         _secretsPath = Path.Combine(_dir, "secrets.dat");
-        Load();
+        _state = States.GetOrAdd(Path.GetFullPath(_dir), _ => new SharedState());
+        lock (_state.Gate)
+        {
+            if (!_state.Loaded) { Load(); _state.Loaded = true; }
+        }
     }
 
     public string CacheDirectory => Path.Combine(_dir, "cache");
@@ -85,13 +98,61 @@ public sealed class SettingsStore
     {
         get
         {
-            if (Arr("stremio_addon_urls") is List<string> list && list.Count > 0) return list;
+            var protectedValue = Secret("stremio_addon_urls");
+            if (protectedValue.Length > 0) { try { return JsonSerializer.Deserialize<List<string>>(protectedValue) ?? []; } catch { return []; } }
+            var list = Arr("stremio_addon_urls");
             var legacy = (Str("stremio_addon_url") ?? "").Trim();
-            if (legacy.Length > 0 && UrlNormalizer.NormalizeAddon(legacy) is string norm) return [norm];
+            if (list is null && legacy.Length > 0 && UrlNormalizer.NormalizeAddon(legacy) is string norm) list = [norm];
+            if (list is not null) { StremioAddonUrls = list; return list; }
             return [DefaultAddon];
         }
-        set => Set("stremio_addon_urls", value.Select(u => UrlNormalizer.NormalizeAddon(u)).OfType<string>().Distinct().OrderBy(x => x).ToList());
+        set
+        {
+            lock (_state.Gate)
+            {
+                SetSecret("stremio_addon_urls", JsonSerializer.Serialize(value.Select(u => UrlNormalizer.NormalizeAddon(u)).OfType<string>().Distinct().ToList()));
+                _prefs.TryRemove("stremio_addon_urls", out _); _prefs.TryRemove("stremio_addon_url", out _); Save();
+            }
+        }
     }
+    public string M3uUrl { get => Secret("m3u_url"); set => SetSecret("m3u_url", value.Trim()); }
+    public string XmltvUrl { get => Secret("xmltv_url"); set => SetSecret("xmltv_url", value.Trim()); }
+    public bool HighContrastFocus { get => Bool("high_contrast_focus", false); set => Set("high_contrast_focus", value); }
+    public bool SpokenScoreSummaries { get => Bool("spoken_score_summaries", false); set => Set("spoken_score_summaries", value); }
+    public bool ScoreSaverEnabled { get => Bool("score_saver", true); set => Set("score_saver", value); }
+    public bool FollowFocusedAudio { get => Bool("follow_focused_audio", false); set => Set("follow_focused_audio", value); }
+    public List<string> DisabledLeagues { get => Arr("disabled_leagues") ?? []; set => Set("disabled_leagues", value.Distinct().ToList()); }
+    public List<SportEvent> SavedEvents
+    {
+        get
+        {
+            try { return _prefs.TryGetValue("saved_events", out var data) ? data.Deserialize<List<SportEvent>>() ?? [] : []; }
+            catch { return []; }
+        }
+        set => Set("saved_events", value.DistinctBy(e => $"{e.League}:{e.Id}").ToList());
+    }
+    public bool ToggleSavedEvent(SportEvent ev)
+    {
+        lock (_state.Gate)
+        {
+            var events = SavedEvents; var index = events.FindIndex(e => e.Id == ev.Id && e.League == ev.League);
+            if (index >= 0) events.RemoveAt(index); else events.Add(ev);
+            SavedEvents = events; return index < 0;
+        }
+    }
+    public bool IsSavedEvent(SportEvent ev) => SavedEvents.Any(e => e.Id == ev.Id && e.League == ev.League);
+    private static readonly string[] PortableKeys = ["sports_order", "disabled_leagues", "favorite_team_profiles_v2", "saved_events", "live_game_alerts_enabled", "redzone_alerts_enabled", "low_latency_mode", "audio_normalization_enabled", "adaptive_quality_enabled", "reduced_motion", "large_text", "score_saver", "follow_focused_audio", "high_contrast_focus", "spoken_score_summaries"];
+    public string ExportPreferences() => JsonSerializer.Serialize(_prefs.Where(p => PortableKeys.Contains(p.Key)).ToDictionary(p => p.Key, p => p.Value), new JsonSerializerOptions { WriteIndented = true });
+    public void ImportPreferences(string json)
+    {
+        var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json) ?? throw new InvalidDataException("Invalid preferences backup.");
+        lock (_state.Gate) { foreach (var pair in values.Where(p => PortableKeys.Contains(p.Key))) _prefs[pair.Key] = pair.Value.Clone(); Save(); }
+    }
+    private static void AtomicWrite(string path, byte[] data)
+    {
+        var temporary = path + ".tmp"; File.WriteAllBytes(temporary, data); File.Move(temporary, path, overwrite: true);
+    }
+
     public string ChannelCacheIdentity
     {
         get => Str("channel_cache_identity") ?? "";
@@ -235,16 +296,14 @@ public sealed class SettingsStore
 
     private void Set(string key, object? value)
     {
-        _prefs[key] = JsonSerializer.SerializeToElement(value);
-        Save();
+        lock (_state.Gate) { _prefs[key] = JsonSerializer.SerializeToElement(value); Save(); }
     }
 
     private string Secret(string key) => _secrets.TryGetValue(key, out var v) ? v : "";
 
     private void SetSecret(string key, string value)
     {
-        _secrets[key] = value;
-        SaveSecrets();
+        lock (_state.Gate) { _secrets[key] = value; SaveSecrets(); }
     }
 
     private void Load()
@@ -252,9 +311,9 @@ public sealed class SettingsStore
         try
         {
             if (File.Exists(_prefsPath))
-                _prefs = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(_prefsPath)) ?? new();
+                foreach (var pair in JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(_prefsPath)) ?? new()) _prefs[pair.Key] = pair.Value;
         }
-        catch { _prefs = new(); }
+        catch { _prefs.Clear(); }
         try
         {
             if (File.Exists(_secretsPath))
@@ -263,15 +322,15 @@ public sealed class SettingsStore
                 var json = OperatingSystem.IsWindows()
                     ? System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(raw, null, DataProtectionScope.CurrentUser))
                     : System.Text.Encoding.UTF8.GetString(raw);
-                _secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
+                foreach (var pair in JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new()) _secrets[pair.Key] = pair.Value;
             }
         }
-        catch { _secrets = new(); }
+        catch { _secrets.Clear(); }
     }
 
     private void Save()
     {
-        try { File.WriteAllText(_prefsPath, JsonSerializer.Serialize(_prefs)); } catch { }
+        try { AtomicWrite(_prefsPath, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(_prefs))); } catch { }
     }
 
     private void SaveSecrets()
@@ -280,7 +339,7 @@ public sealed class SettingsStore
         {
             var raw = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(_secrets));
             var out_ = OperatingSystem.IsWindows() ? ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser) : raw;
-            File.WriteAllBytes(_secretsPath, out_);
+            AtomicWrite(_secretsPath, out_);
         }
         catch { }
     }

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "statuses": [
+    { "raw": "LIVE", "active": true },
+    { "raw": "HALFTIME", "active": true },
+    { "raw": "NOT_STARTED", "active": false },
+    { "raw": "FINISHED", "active": false }
+  ],
+  "qualities": [
+    { "title": "ESPN 4K HDR", "resolution": "4K", "hdr": true, "rank": 760 },
+    { "title": "Sky Sports 1080p 60fps", "resolution": "1080p", "hdr": false, "rank": 530 },
+    { "title": "Regional Sports HD", "resolution": "HD", "hdr": false, "rank": 300 },
+    { "title": "Channel 12", "resolution": null, "hdr": false, "rank": 100 }
+  ],
+  "headers": {
+    "input": {
+      "User-Agent": "RallyFixture/1",
+      "Referer": "https://example.test/game",
+      "X-Unsafe": "drop-me",
+      "Cookie": "session=fixture",
+      "Origin": "https://example.test"
+    },
+    "allowed": ["User-Agent", "Referer", "Cookie", "Origin"]
+  },
+  "settings": [
+    { "provider": "XTREAM", "server": "line.test:8080", "user": "u", "pass": "p", "valid": true },
+    { "provider": "XTREAM", "server": "line.test:8080", "user": "u", "pass": "", "valid": false },
+    { "provider": "STALKER", "portal": "portal.test/c", "mac": "00:1A:79:12:34:56", "valid": true },
+    { "provider": "STALKER", "portal": "portal.test/c", "mac": "bad", "valid": false }
+  ],
+  "details": {
+    "teamName": "Denver Broncos",
+    "teamAbbreviation": "DEN",
+    "category": "Passing",
+    "labels": ["C/ATT", "YDS", "TD"],
+    "rows": [
+      { "displayName": "B. Nix", "stats": ["18/27", "214", "2"] },
+      { "displayName": "Backup", "stats": ["1/2", "8", "0"] }
+    ]
+  },
+  "health": [
+    { "successes": 1, "failures": 0, "startupMs": 750, "score": 23 },
+    { "successes": 0, "failures": 10, "startupMs": null, "score": -240 }
+  ]
+}

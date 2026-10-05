@@ -9,6 +9,7 @@ namespace Rally.Core;
 public sealed class StalkerClient(HttpClient http, SettingsStore settings)
 {
     private readonly SemaphoreSlim _authGate = new(1, 1);
+    private readonly SemaphoreSlim _linkGate = new(1, 1);
     private List<IptvChannel> _channels = [];
     private DateTimeOffset _channelsAt = DateTimeOffset.MinValue;
     private readonly Dictionary<string, (ChannelGuide Guide, DateTimeOffset At)> _guides = new();
@@ -23,6 +24,7 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
         await _authGate.WaitAsync(ct);
         try
         {
+            if (!force && !string.IsNullOrEmpty(settings.AuthToken)) return true;
             settings.AuthToken = "";
             if (await TryAuthAsync(ct)) return true;
             var current = settings.PortalUrl;
@@ -43,6 +45,7 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
     {
         JsonElement js;
         try { js = await GetAsync("stb", "handshake", new() { ["token"] = "", ["prehash"] = "0" }, false, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return false; }
         var raw = Str(js, "token", "random");
         if (string.IsNullOrEmpty(raw)) return false;
@@ -60,6 +63,7 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
                 ["hw_version"] = "1.7-BD-00", ["not_valid_token"] = "0",
             }, true, ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { settings.AuthToken = ""; throw; }
         catch { settings.AuthToken = ""; return false; }
         if (StatusRejected(profile)) { settings.AuthToken = ""; return false; }
         return true;
@@ -121,6 +125,7 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
             var js = await GetAsync("itv", "get_all_channels", new(), true, ct);
             all.AddRange(ChannelObjects(js));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { /* fall through to ordered list */ }
         if (all.Count == 0)
         {
@@ -132,6 +137,7 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
                     js = await GetAsync("itv", "get_ordered_list",
                         new() { ["p"] = page.ToString(), ["fav"] = "0", ["sortby"] = "number" }, true, ct);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch { break; }
                 var (objs, total) = ChannelObjectsWithTotal(js);
                 all.AddRange(objs);
@@ -139,7 +145,9 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
             }
         }
         Dictionary<string, string> genres = new();
-        try { genres = GenreMap(await GetAsync("itv", "get_genres", new(), true, ct)); } catch { }
+        try { genres = GenreMap(await GetAsync("itv", "get_genres", new(), true, ct)); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { }
         return all.Select(o => MapChannel(o, genres)).OfType<IptvChannel>().ToList();
     }
 
@@ -161,29 +169,44 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
 
     public async Task<string> ResolveStreamUrlAsync(string channelId, CancellationToken ct = default)
     {
-        if ((channelId.StartsWith("http://") || channelId.StartsWith("https://")) && !channelId.Contains("localhost"))
-            return CleanStreamUrl(channelId);
-        var cmd = channelId;
-        if (!cmd.Contains("localhost") && !cmd.StartsWith("ffmpeg") && !cmd.StartsWith("ffrt") && !cmd.StartsWith("auto"))
+        if (PlayableLink(channelId) is { } direct) return direct;
+        await _linkGate.WaitAsync(ct);
+        try
         {
-            var cached = _channels.FirstOrDefault(c => c.Id == channelId)?.StreamUrl;
-            if (!string.IsNullOrEmpty(cached)) cmd = cached;
+            var cmd = _channels.FirstOrDefault(c => c.Id == channelId)?.StreamUrl ?? channelId;
+            if (!await AuthenticateAsync(false, ct)) throw new HttpRequestException("The portal could not authenticate.");
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    var js = await GetAsync("itv", "create_link", new() { ["cmd"] = cmd }, true, ct);
+                    var raw = js.ValueKind == JsonValueKind.String ? js.GetString()
+                        : js.ValueKind == JsonValueKind.Object ? Str(js, "cmd") : null;
+                    if (raw is not null && PlayableLink(raw) is { } link) return link;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) when (ex is HttpRequestException or JsonException) { }
+                if (attempt == 0 && !await AuthenticateAsync(true, ct)) break;
+            }
+            throw new HttpRequestException("The portal did not return a playable stream link.");
         }
-        if (string.IsNullOrEmpty(settings.AuthToken)) await AuthenticateAsync(false, ct);
-        JsonElement? js = null;
-        try { js = await GetAsync("itv", "create_link", new() { ["cmd"] = cmd }, true, ct); }
-        catch
-        {
-            if (await AuthenticateAsync(true, ct))
-                try { js = await GetAsync("itv", "create_link", new() { ["cmd"] = cmd }, true, ct); } catch { }
-        }
-        if (js is JsonElement el)
-        {
-            if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("cmd", out var c) && c.GetString() is string s) return CleanStreamUrl(s);
-            if (el.ValueKind == JsonValueKind.String) return CleanStreamUrl(el.GetString() ?? cmd);
-        }
-        return CleanStreamUrl(cmd);
+        finally { _linkGate.Release(); }
     }
+
+    private static string? PlayableLink(string raw)
+    {
+        var url = CleanStreamUrl(raw);
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+            && !uri.IsLoopback && uri.Host != "0.0.0.0" ? url : null;
+    }
+
+    public Dictionary<string, string> PlaybackHeaders() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["User-Agent"] = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3",
+        ["Cookie"] = "mac=" + Uri.EscapeDataString(settings.MacAddress) + "; stb_lang=en; timezone=GMT",
+        ["Referer"] = RefererFor(settings.PortalUrl),
+        ["Authorization"] = StreamRequestHeaders.NormalizedBearerToken(settings.AuthToken)
+    };
 
     public static string CleanStreamUrl(string raw)
     {
@@ -206,6 +229,7 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
                 new() { ["ch_id"] = channelId, ["size"] = "4" }, true, ct);
             guide = ParseGuide(js);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return g.Guide; }
         if (guide is not null) _guides[channelId] = (guide, DateTimeOffset.UtcNow);
         return guide;
@@ -262,7 +286,8 @@ public sealed class StalkerClient(HttpClient http, SettingsStore settings)
             + (string.IsNullOrEmpty(settings.DeviceId) ? "" : $"; DeviceId: {settings.DeviceId}; DeviceId2: {settings.DeviceId}")
             + (string.IsNullOrEmpty(mac) ? "" : $"; Mac: {mac}");
         req.Headers.Add("X-User-Agent", xua);
-        req.Headers.UserAgent.ParseAdd("Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3");
+        // MAG firmware's user agent contains tokens outside .NET's strict parser.
+        req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3");
         req.Headers.Add("X-Requested-With", "XMLHttpRequest");
         req.Headers.Referrer = new Uri(RefererFor(portal));
         if (!string.IsNullOrEmpty(mac)) req.Headers.Add("Cookie", $"mac={mac}; stb_lang=en; timezone=GMT");

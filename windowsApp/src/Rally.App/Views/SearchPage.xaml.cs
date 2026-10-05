@@ -1,296 +1,44 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
+using Rally.App.Design;
 using Rally.Core;
-
 namespace Rally.App.Views;
-
-// Global search across games, favorite teams, leagues, Live TV channels and
-// Stremio addon streams. Mirrors SearchScreen + SearchViewModel: 250ms
-// debounce, capped groups, guide enrichment for the first 8 channels, addon
-// lookup only for queries of 3+ chars. Clicks route to EventDetailPage (game),
-// TeamHubPage (team), LeagueCenterPage (league string), PlayerPage with the
-// IptvChannel directly (channel — same player path as LiveTv; PlayerPage
-// resolves via StreamResolver.ChannelCandidates), and PlayerPage with the
-// stream URL string (addon option — PlayerPage plays it as a Stremio-kind
-// one-off, same branch as highlight clips).
 public sealed partial class SearchPage : Page
 {
-    private readonly HttpClient _http = new();
-    private readonly EspnClient _espn;
-    private readonly StremioClient _stremio;
-    private readonly SettingsStore _settings = new();
-    private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
-
-    private List<SportEvent> _index = [];
-    private List<IptvChannel> _channels = [];
-    private bool _indexReady;
-    private int _searchSeq;
-
+    private readonly PageState _state;
+    private readonly TextBox _query = new() { PlaceholderText = "Search games, teams, channels and sources", FontSize = 20 };
+    private readonly StackPanel _results = new() { Spacing = 16 };
+    private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(300) };
+    private CancellationTokenSource? _request;
     public SearchPage()
     {
-        InitializeComponent();
-        _espn = new EspnClient(_http);
-        _stremio = new StremioClient(_http);
-        _debounce.Tick += Debounce_Tick;
-        Loaded += async (_, _) => await WarmIndexAsync().ConfigureAwait(false);
+        InitializeComponent(); _state = new(this); _query.TextChanged += (_, _) => { _debounce.Stop(); _debounce.Start(); };
+        _debounce.Tick += (_, _) => { _debounce.Stop(); _ = Search(); }; Unloaded += (_, _) => { _debounce.Stop(); _request?.Cancel(); };
     }
-
-    private async Task WarmIndexAsync()
+    protected override void OnNavigatedTo(NavigationEventArgs e) { _state.Activate(); _state.Root.Children.Clear(); _state.Root.Children.Add(RallyUi.Scroll(RallyUi.Column(RallyUi.Heading("Search"), _query, _results))); _query.Focus(FocusState.Programmatic); }
+    private async Task Search()
     {
+        _request?.Cancel(); _request?.Dispose(); _request = CancellationTokenSource.CreateLinkedTokenSource(_state.Token); var ct = _request.Token;
+        var query = _query.Text.Trim(); _results.Children.Clear(); if (query.Length < 2) return;
+        _results.Children.Add(RallyUi.Text("Searching…", 13, true));
         try
         {
-            _index = await _espn.FetchAllAsync().ConfigureAwait(false);
-            _channels = await LoadChannelsAsync().ConfigureAwait(false);
-            _indexReady = true;
-            DispatcherQueue.TryEnqueue(() =>
-                IndexNote.Text = $"Index ready · {_index.Count} games · {_channels.Count} channels");
+            var games = (await App.Data.GamesAsync(ct: ct)).Where(g => (g.Name + " " + g.League + " " + g.HomeTeam?.Name + " " + g.AwayTeam?.Name).Contains(query, StringComparison.OrdinalIgnoreCase)).Take(18).ToList();
+            if (ct.IsCancellationRequested) return; _results.Children.Clear(); if (games.Count > 0) { _results.Children.Add(RallyUi.Heading("Games")); _results.Children.Add(PageState.Events(games, false)); }
+            var teams = games.SelectMany(g => new[] { g.HomeTeam, g.AwayTeam }).OfType<Team>().Where(t => t.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).DistinctBy(t => t.Id).Take(6);
+            foreach (var team in teams) { var league = games.First(g => g.HomeTeam?.Id == team.Id || g.AwayTeam?.Id == team.Id).League; _results.Children.Add(RallyUi.Tile(RallyUi.Row(RallyUi.Image(team.LogoUrl, 32, 32), RallyUi.Text(team.Name, 15)), team.Name, () => PageState.Go(typeof(TeamHubPage), new FavoriteTeam(team.Id, league, team.Name, team.Abbreviation, team.LogoUrl)))); }
+            List<IptvChannel> channels; try { channels = (await App.Data.ChannelsAsync(ct: ct)).Where(c => (c.Name + " " + c.Guide?.Now?.Title).Contains(query, StringComparison.OrdinalIgnoreCase)).Take(25).ToList(); } catch (OperationCanceledException) { throw; } catch { channels = []; }
+            if (ct.IsCancellationRequested) return;
+            if (channels.Count > 0) _results.Children.Add(RallyUi.Heading("Channels"));
+            foreach (var channel in channels) _results.Children.Add(RallyUi.Button(channel.Name, () => PageState.Go(typeof(PlayerPage), channel)));
+            var options = await Task.WhenAll(App.Data.Settings.StremioAddonUrls.Select(async addon => { try { return await App.Data.Addons.SearchAsync(query, addon, ct); } catch (OperationCanceledException) { throw; } catch { return new List<StremioStreamOption>(); } }));
+            if (ct.IsCancellationRequested) return;
+            var candidates = options.SelectMany(x => x).Where(o => o.IsDirectPlayable).DistinctBy(o => o.StreamUrl).Select(o => new PlayCandidate(Guid.NewGuid().ToString(), o.Title, o.StreamUrl, o.Headers, PlayKind.Stremio, true, 0, AddonName: o.AddonName)).ToList();
+            if (candidates.Count > 0) { _results.Children.Add(RallyUi.Heading("Streaming Sources")); _results.Children.Add(GamePanels.Sources(candidates, c => PageState.Go(typeof(PlayerPage), c))); }
+            if (_results.Children.Count == 0) _results.Children.Add(RallyUi.Empty("No results", "Try a team, matchup, league, or channel name."));
         }
-        catch
-        {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                IndexNote.Text = "Index unavailable — offline search only.";
-                ErrorText.Text = "Could not load games or channels. Check your connection and type to retry.";
-                ErrorText.Visibility = Visibility.Visible;
-            });
-        }
-    }
-
-    private Task<List<IptvChannel>> LoadChannelsAsync(CancellationToken ct = default)
-    {
-        if (_settings.IptvProvider == IptvProvider.Xtream)
-            return new XtreamClient(_http, _settings).GetChannelsAsync(ct);
-        return new StalkerClient(_http, _settings).GetChannelsAsync(ct);
-    }
-
-    private void QueryBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        _debounce.Stop();
-        _debounce.Start();
-    }
-
-    private async void Debounce_Tick(object? sender, object e)
-    {
-        _debounce.Stop();
-        await RunSearchAsync(QueryBox.Text, ++_searchSeq).ConfigureAwait(false);
-    }
-
-    private async Task RunSearchAsync(string rawQuery, int seq)
-    {
-        var q = rawQuery.Trim();
-        if (q.Length == 0)
-        {
-            DispatcherQueue.TryEnqueue(ClearResults);
-            return;
-        }
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            Spinner.IsActive = true;
-            ErrorText.Visibility = Visibility.Collapsed;
-            EmptyText.Text = "Searching…";
-            EmptyText.Visibility = Visibility.Visible;
-        });
-
-        // Local groups: cheap synchronous filters over the warmed index.
-        var games = _index.Where(ev =>
-            ev.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
-            || (ev.League?.Contains(q, StringComparison.OrdinalIgnoreCase) == true)
-            || (ev.Sport?.Contains(q, StringComparison.OrdinalIgnoreCase) == true)
-            || (ev.HomeTeam?.Name.Contains(q, StringComparison.OrdinalIgnoreCase) == true)
-            || (ev.AwayTeam?.Name.Contains(q, StringComparison.OrdinalIgnoreCase) == true))
-            .Take(20).Select(ev => new EventRow(ev)).ToList();
-        var teams = _settings.FavoriteTeamProfiles.Where(t =>
-            t.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
-            || t.Abbreviation.Contains(q, StringComparison.OrdinalIgnoreCase)
-            || t.League.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .Take(12).Select(t => new TeamRow(t)).ToList();
-        var leagues = EspnClient.Leagues.Where(l =>
-            l.League.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .Take(8).Select(l => new LeagueRow(l.League)).ToList();
-
-        // Live TV: filter cached channels, enrich the first 8 with now/next guide.
-        List<ChannelRow> channels = [];
-        try
-        {
-            var matches = _channels.Where(c => c.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
-                .Take(24).ToList();
-            var head = matches.Take(8).ToList();
-            var enriched = new IptvChannel[head.Count];
-            var tasks = head.Select(async (c, i) =>
-            {
-                try
-                {
-                    var guide = _settings.IptvProvider == IptvProvider.Xtream
-                        ? await new XtreamClient(_http, _settings).GetGuideAsync(c.Id).ConfigureAwait(false)
-                        : await new StalkerClient(_http, _settings).GetGuideAsync(c.Id).ConfigureAwait(false);
-                    enriched[i] = guide is null ? c : c with { Guide = guide };
-                }
-                catch { enriched[i] = c; }
-            });
-            await Task.WhenAll(tasks).ConfigureAwait(false);
-            channels = enriched.Select(c => new ChannelRow(c))
-                .Concat(matches.Skip(8).Select(c => new ChannelRow(c))).ToList();
-        }
-        catch { /* channel search degrades to local groups */ }
-
-        // Addon streams: only for queries of 3+ chars, across configured addons
-        // for query-matched events; only directly playable options are shown.
-        List<StreamRow> streams = [];
-        if (q.Length >= 3)
-        {
-            try
-            {
-                var seeds = games.Take(5).Select(r => r.Event).ToList();
-                var addons = _settings.StremioAddonUrls;
-                var found = new List<StremioStreamOption>();
-                foreach (var ev in seeds)
-                {
-                    foreach (var addon in addons)
-                    {
-                        try { found.AddRange(await _stremio.FindStreamsAsync(ev, addon).ConfigureAwait(false)); }
-                        catch { /* per-addon failure is not fatal */ }
-                    }
-                }
-                streams = found.Where(s => s.IsDirectPlayable)
-                    .Take(20).Select(s => new StreamRow(s)).ToList();
-            }
-            catch { /* addon search degrades to the other groups */ }
-        }
-
-        if (seq != _searchSeq) return;
-        DispatcherQueue.TryEnqueue(() => BindResults(q, games, teams, leagues, channels, streams));
-    }
-
-    private void ClearResults()
-    {
-        Spinner.IsActive = false;
-        Games.Visibility = Teams.Visibility = Leagues.Visibility = Channels.Visibility = Streams.Visibility =
-            GamesHeader.Visibility = TeamsHeader.Visibility = LeaguesHeader.Visibility =
-            ChannelsHeader.Visibility = StreamsHeader.Visibility = Visibility.Collapsed;
-        EmptyText.Text = "Start typing to search every source.";
-        EmptyText.Visibility = Visibility.Visible;
-    }
-
-    private void BindResults(string q, List<EventRow> games, List<TeamRow> teams,
-        List<LeagueRow> leagues, List<ChannelRow> channels, List<StreamRow> streams)
-    {
-        Spinner.IsActive = false;
-        Bind(Games, GamesHeader, games);
-        Bind(Teams, TeamsHeader, teams);
-        Bind(Leagues, LeaguesHeader, leagues);
-        Bind(Channels, ChannelsHeader, channels);
-        Bind(Streams, StreamsHeader, streams);
-        var total = games.Count + teams.Count + leagues.Count + channels.Count + streams.Count;
-        EmptyText.Text = total == 0 ? "No results found." : $"{total} result{(total == 1 ? "" : "s")} for “{q}”.";
-        EmptyText.Visibility = Visibility.Visible;
-        if (!_indexReady) IndexNote.Text = "Index still loading — results may be partial.";
-    }
-
-    private static void Bind<T>(ListView view, TextBlock header, List<T> rows)
-    {
-        if (rows.Count == 0)
-        {
-            view.Visibility = header.Visibility = Visibility.Collapsed;
-            return;
-        }
-        view.ItemsSource = rows;
-        view.Visibility = header.Visibility = Visibility.Visible;
-    }
-
-    private void Games_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Games.SelectedItem is EventRow row)
-        {
-            Games.SelectedItem = null;
-            Frame.Navigate(typeof(EventDetailPage), row.Event);
-        }
-    }
-
-    private void Teams_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Teams.SelectedItem is TeamRow row)
-        {
-            Teams.SelectedItem = null;
-            Frame.Navigate(typeof(TeamHubPage), row.Team);
-        }
-    }
-
-    private void Leagues_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Leagues.SelectedItem is LeagueRow row)
-        {
-            Leagues.SelectedItem = null;
-            Frame.Navigate(typeof(LeagueCenterPage), row.League);
-        }
-    }
-
-    private void Channels_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Channels.SelectedItem is ChannelRow row)
-        {
-            Channels.SelectedItem = null;
-            Frame.Navigate(typeof(PlayerPage), row.Channel);
-        }
-    }
-
-    private void Streams_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Streams.SelectedItem is StreamRow row)
-        {
-            Streams.SelectedItem = null;
-            Frame.Navigate(typeof(PlayerPage), row.Option.StreamUrl);
-        }
-    }
-
-    public sealed record EventRow(SportEvent Event)
-    {
-        public string Name => Event.Name;
-        public string Subtitle => $"{Event.League} · {Event.GameStatusDetail ?? Event.Status.ToString()}";
-    }
-
-    public sealed record TeamRow(FavoriteTeam Team)
-    {
-        public string Name => Team.Name;
-        public string Subtitle => $"Favorite · {Team.League}";
-    }
-
-    public sealed record LeagueRow(string League)
-    {
-        public string Name => League;
-        public string Subtitle => "League Center";
-    }
-
-    public sealed record ChannelRow(IptvChannel Channel)
-    {
-        public string Name => Channel.Name;
-        public string Subtitle
-        {
-            get
-            {
-                var now = Channel.Guide?.Now?.Title;
-                var next = Channel.Guide?.Next?.Title;
-                var parts = new List<string>();
-                if (!string.IsNullOrEmpty(now)) parts.Add($"Now · {now}");
-                if (!string.IsNullOrEmpty(next)) parts.Add($"Next · {next}");
-                if (parts.Count == 0) parts.Add(Channel.Category);
-                return string.Join("   ", parts);
-            }
-        }
-    }
-
-    public sealed record StreamRow(StremioStreamOption Option)
-    {
-        public string Title => Option.Title;
-        public string Subtitle
-        {
-            get
-            {
-                var bits = new List<string>();
-                if (!string.IsNullOrEmpty(Option.Quality)) bits.Add(Option.Quality);
-                if (!string.IsNullOrEmpty(Option.AddonName)) bits.Add(Option.AddonName);
-                if (bits.Count == 0) bits.Add("Adaptive");
-                return string.Join(" · ", bits);
-            }
-        }
+        catch (OperationCanceledException) { }
+        catch { if (!ct.IsCancellationRequested) _results.Children.Add(RallyUi.Empty("Search couldn't finish", "Check your connection.", "Retry", () => _ = Search())); }
     }
 }

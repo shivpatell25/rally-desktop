@@ -20,6 +20,7 @@ public sealed class EspnDetail(HttpClient http)
             res.EnsureSuccessStatusCode();
             doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return GameDetail.Empty; }
         using (doc) return ParseSummary(doc.RootElement, awayAbbr, homeAbbr);
     }
@@ -89,7 +90,8 @@ public sealed class EspnDetail(HttpClient http)
                         a?.GetPropertyOrNull("headshot")?.GetPropertyOrNull("href")?.GetString(),
                         a?.GetPropertyOrNull("jersey")?.GetString(),
                         a?.GetPropertyOrNull("position")?.GetPropertyOrNull("abbreviation")?.GetString(),
-                        item.GetPropertyOrNull("stats")?.EnumerateArray().Select(x => x.GetString() ?? x.GetRawText()).ToList()));
+                        item.GetPropertyOrNull("stats")?.EnumerateArray().Select(x => x.GetString() ?? x.GetRawText()).ToList(),
+                        a?.GetPropertyOrNull("id")?.GetString()));
                 }
                 if (rows.Count == 0) continue;
                 var team = group.GetPropertyOrNull("team");
@@ -140,7 +142,7 @@ public sealed class EspnDetail(HttpClient http)
             var media = b.GetPropertyOrNull("media")?.GetPropertyOrNull("shortName")?.GetString();
             if (!string.IsNullOrEmpty(media)) broadcasts.Add(media);
         }
-        return new GameDetail(leaders, clips, tables, comparisons, broadcasts.Distinct().ToList());
+        return new GameDetail(leaders, clips, tables, comparisons, broadcasts.Distinct().ToList()) { Plays = GameData.ParsePlays(root), Context = GameData.ParseContext(root) };
     }
 
     public async Task<List<Team>> FetchTeamsAsync(string sport, string league, CancellationToken ct = default)

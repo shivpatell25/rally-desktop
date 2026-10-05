@@ -9,7 +9,7 @@ public sealed record RallyRelease(string Tag, string PageUrl, string? AssetUrl, 
 public static class RallyInfo
 {
     // Same train as macOS (packaging/package.sh version argument).
-    public const string CurrentVersion = "0.4.0";
+    public const string CurrentVersion = "0.8.0";
 }
 
 public sealed class UpdateChecker(HttpClient? http = null)
@@ -39,15 +39,12 @@ public sealed class UpdateChecker(HttpClient? http = null)
             long? assetSize = null;
             if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == System.Text.Json.JsonValueKind.Array)
             {
+                var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64";
                 foreach (var a in assets.EnumerateArray())
                 {
                     var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                     var lower = name.ToLowerInvariant();
-                    var isWin = lower.Contains("win") || lower.EndsWith(".msix") || lower.EndsWith(".msixbundle")
-                        || lower.EndsWith(".exe") || lower.EndsWith(".zip");
-                    var isApk = lower.EndsWith(".apk");
-                    var isDmg = lower.EndsWith(".dmg");
-                    if (!isWin || isApk || isDmg) continue;
+                    if (!lower.Contains("windows") || !lower.Contains(arch) || !(lower.EndsWith(".zip") || lower.EndsWith(".exe") || lower.EndsWith(".msix"))) continue;
                     assetUrl = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
                     assetSize = a.TryGetProperty("size", out var s) && s.TryGetInt64(out var sz) ? sz : null;
                     break;

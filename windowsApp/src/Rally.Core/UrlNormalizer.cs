@@ -25,11 +25,14 @@ public static class UrlNormalizer
     public static string? NormalizeAddon(string raw)
     {
         var value = raw.Trim();
+        if (value.StartsWith("stremio://", StringComparison.OrdinalIgnoreCase)) value = "https://" + value[10..];
         if (value.Length == 0) return null;
         if (!value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             value = "https://" + value;
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host)) return null;
+        if (uri.Scheme is not ("http" or "https")) return null;
+        uri = new UriBuilder(uri) { Fragment = "" }.Uri;
         if (!uri.AbsolutePath.EndsWith("manifest.json", StringComparison.Ordinal))
         {
             var path = (uri.AbsolutePath.Trim('/') + "/manifest.json").Trim('/');

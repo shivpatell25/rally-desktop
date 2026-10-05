@@ -1,226 +1,157 @@
-using System.Text.RegularExpressions;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Rally.App.Design;
 using Rally.App.Services;
 using Rally.Core;
-
+using Windows.Storage.Pickers;
+using Windows.ApplicationModel.DataTransfer;
 namespace Rally.App.Views;
-
 public sealed partial class SettingsPage : Page
 {
-    private static readonly Regex MacPattern = new(@"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
-
-    private readonly SettingsStore _settings = new();
-    private readonly StalkerClient _stalker;
-    private readonly XtreamClient _xtream;
-    private readonly UpdateService _updates = new();
-
+    private readonly PageState _state;
+    private readonly SettingsStore _settings = App.Data.Settings;
+    private readonly StackPanel _detail = new() { Spacing = 20, MaxWidth = 780, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock _status = RallyUi.Text("", 13, true);
     public SettingsPage()
     {
-        InitializeComponent();
-        var http = new HttpClient();
-        _stalker = new StalkerClient(http, _settings);
-        _xtream = new XtreamClient(http, _settings);
-        Provider.SelectedIndex = _settings.IptvProvider == IptvProvider.Xtream ? 1 : 0;
-        PortalUrl.Text = _settings.PortalUrl;
-        MacAddress.Text = _settings.MacAddress;
-        XtreamServer.Text = _settings.XtreamServerUrl;
-        XtreamUser.Text = _settings.XtreamUsername;
-        XtreamPass.Password = _settings.XtreamPassword;
-        Addons.Text = string.Join("\n", _settings.StremioAddonUrls);
-        TeamLeague.ItemsSource = EspnClient.Leagues.Select(l => l.League).ToList();
-        TeamLeague.SelectedIndex = 0;
-        LiveAlerts.IsOn = _settings.LiveGameAlertsEnabled;
-        RedZoneAlerts.IsOn = _settings.RedZoneAlertsEnabled;
-        LowLatency.IsOn = _settings.LowLatencyMode;
-        AdaptiveQuality.IsOn = _settings.AdaptiveQualityEnabled;
-        AudioNormalization.IsOn = _settings.AudioNormalizationEnabled;
-        ReducedMotion.IsOn = _settings.ReducedMotion;
-        LargeText.IsOn = _settings.LargeText;
-        VersionText.Text = $"Rally {RallyInfo.CurrentVersion}";
-        RefreshFavorites();
+        InitializeComponent(); _state = new(this); var layout = new Grid { ColumnSpacing = 32 };
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) }); layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var menu = new StackPanel { Spacing = 8 };
+        foreach (var title in new[] { "Sources", "Playback", "Appearance", "Notifications", "Your Teams", "App & About" }) menu.Children.Add(RallyUi.Button(title, () => Show(title)));
+        RallyUi.Put(layout, menu, 0); RallyUi.Put(layout, RallyUi.Scroll(_detail), 1); _state.Root.Children.Add(layout); Show("Sources");
     }
-
-    private void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    private void Show(string section)
     {
-        // Validation before persisting.
-        var portal = PortalUrl.Text.Trim();
-        if (portal.Length > 0 && !MacPattern.IsMatch(MacAddress.Text.Trim()))
+        _detail.Children.Clear(); _status.Text = ""; _detail.Children.Add(RallyUi.Heading(section));
+        if (section == "Sources") Sources();
+        else if (section == "Playback")
         {
-            Status.Text = "Portal set but MAC address is not XX:XX:XX:XX:XX:XX";
-            return;
+            Toggle("Low Latency", "Use a shorter stream buffer. Less resilient to slow connections.", _settings.LowLatencyMode, v => _settings.LowLatencyMode = v);
+            Toggle("Adaptive Source Quality", "Prefer verified sources using playback history.", _settings.AdaptiveQualityEnabled, v => _settings.AdaptiveQualityEnabled = v);
+            Toggle("Normalize Audio", "Keep volume differences between sources smaller.", _settings.AudioNormalizationEnabled, v => _settings.AudioNormalizationEnabled = v);
+            Toggle("Follow Focused Audio", "In multiview, listen to the stream selected with the keyboard.", _settings.FollowFocusedAudio, v => _settings.FollowFocusedAudio = v);
         }
-        var xtreamServer = XtreamServer.Text.Trim();
-        var xtreamUser = XtreamUser.Text.Trim();
-        var xtreamPass = XtreamPass.Password;
-        bool anyXtream = xtreamServer.Length > 0 || xtreamUser.Length > 0 || xtreamPass.Length > 0;
-        if (anyXtream && (xtreamServer.Length == 0 || xtreamUser.Length == 0 || xtreamPass.Length == 0 ||
-            UrlNormalizer.NormalizeXtreamServer(xtreamServer).Length == 0))
+        else if (section == "Appearance")
         {
-            Status.Text = "Xtream needs server URL, username, and password together";
-            return;
-        }
-        var addonLines = Addons.Text.Split('\n').Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
-        var badAddon = addonLines.FirstOrDefault(u => UrlNormalizer.NormalizeAddon(u) is null);
-        if (badAddon is not null)
-        {
-            Status.Text = $"Invalid addon URL: {badAddon}";
-            return;
-        }
-
-        // Credential change clears the provider token + channel cache identity so
-        // stale auth can never be reused against the new endpoint.
-        var portalChanged = !string.Equals(
-            UrlNormalizer.NormalizePortal(portal), _settings.PortalUrl, StringComparison.Ordinal);
-        var xtreamChanged = !string.Equals(xtreamServer, _settings.XtreamServerUrl, StringComparison.Ordinal) ||
-            !string.Equals(xtreamUser, _settings.XtreamUsername, StringComparison.Ordinal);
-        var note = "";
-        if (portalChanged || xtreamChanged)
-        {
-            _settings.AuthToken = "";
-            _settings.ChannelCacheIdentity = "";
-            note = " Credentials changed — signed out, please Test connection.";
-        }
-
-        _settings.IptvProvider = (Provider.SelectedItem as ComboBoxItem)?.Tag as string == "Xtream"
-            ? IptvProvider.Xtream : IptvProvider.Stalker;
-        _settings.PortalUrl = portal;
-        _settings.XtreamServerUrl = xtreamServer;
-        _settings.XtreamUsername = xtreamUser;
-        _settings.XtreamPassword = xtreamPass;
-        _settings.StremioAddonUrls = addonLines;
-        _settings.SetupComplete = true;
-        Status.Text = "Saved." + note;
-    }
-
-    private async void Test_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-    {
-        Status.Text = "Testing…";
-        Save_Click(sender, e);
-        try
-        {
-            var ok = _settings.IptvProvider == IptvProvider.Stalker
-                ? await _stalker.AuthenticateAsync(true).ConfigureAwait(false)
-                : await _xtream.AuthenticateAsync().ConfigureAwait(false);
-            Status.Text = ok ? "Connected" : "Failed — check URL and credentials";
-        }
-        catch { Status.Text = "Failed — check URL and credentials"; }
-    }
-
-    private void RefreshFavorites() =>
-        FavoritesList.ItemsSource = _settings.FavoriteTeamProfiles.ToList();
-
-    private async void AddTeam_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-    {
-        var league = TeamLeague.SelectedItem as string ?? "";
-        var name = TeamName.Text.Trim();
-        if (league.Length == 0 || name.Length == 0)
-        {
-            TeamsStatus.Text = "Pick a league and type a team name";
-            return;
-        }
-        TeamsStatus.Text = "Looking up…";
-        try
-        {
-            var meta = EspnClient.Leagues.First(l => l.League == league);
-            var detail = new EspnDetail(new HttpClient());
-            var rows = await detail.FetchStandingsAsync(meta.Sport, meta.Path).ConfigureAwait(false);
-            var match = rows.FirstOrDefault(r =>
-                r.TeamName.Equals(name, StringComparison.OrdinalIgnoreCase) ||
-                r.TeamName.Contains(name, StringComparison.OrdinalIgnoreCase) ||
-                r.Abbreviation.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (match is null)
+            Toggle("Reduced Motion", "Keep focus and screen transitions immediate.", _settings.ReducedMotion, v => _settings.ReducedMotion = v);
+            Toggle("Larger Text", "Increase interface text for easier reading. Reopen a screen to apply.", _settings.LargeText, v => _settings.LargeText = v);
+            Toggle("High Contrast Focus", "Use brighter keyboard focus edges.", _settings.HighContrastFocus, v => _settings.HighContrastFocus = v);
+            Toggle("Spoken Score Summaries", "Announce the live scores when opening Home.", _settings.SpokenScoreSummaries, v => _settings.SpokenScoreSummaries = v);
+            Toggle("Score Saver", "Show ambient scores after five idle minutes.", _settings.ScoreSaverEnabled, v => _settings.ScoreSaverEnabled = v);
+            _detail.Children.Add(RallyUi.Text("Sports on Home", 16, false, true));
+            foreach (var league in HomePage.HomeSports())
             {
-                TeamsStatus.Text = $"No team matching '{name}' in {league}";
-                return;
+                var check = new CheckBox { Content = league, IsChecked = !_settings.DisabledLeagues.Contains(league) };
+                check.Click += (_, _) => { var disabled = _settings.DisabledLeagues; if (check.IsChecked == true) disabled.Remove(league); else if (!disabled.Contains(league)) disabled.Add(league); _settings.DisabledLeagues = disabled; };
+                var up = RallyUi.Button("↑", () => MoveSport(league, -1)); var down = RallyUi.Button("↓", () => MoveSport(league, 1));
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(up, $"Move {league} earlier"); Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(down, $"Move {league} later");
+                _detail.Children.Add(RallyUi.Row(check, up, down));
             }
-            var added = _settings.ToggleFavoriteTeam(
-                new FavoriteTeam(match.TeamId, league, match.TeamName, match.Abbreviation, match.LogoUrl));
-            TeamsStatus.Text = added ? $"Added {match.TeamName}" : $"Removed {match.TeamName}";
-            TeamName.Text = "";
-            RefreshFavorites();
         }
-        catch { TeamsStatus.Text = "Lookup failed — check connection and retry"; }
-    }
-
-    private async void BrowseClubs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-    {
-        var league = TeamLeague.SelectedItem as string ?? "";
-        if (league.Length == 0) { CatalogStatus.Text = "Pick a league first"; return; }
-        CatalogStatus.Text = "Loading clubs…";
-        try
+        else if (section == "Notifications")
         {
-            var meta = EspnClient.Leagues.First(l => l.League == league);
-            var detail = new EspnDetail(new HttpClient());
-            var teams = await detail.FetchTeamsAsync(meta.Sport, meta.Path).ConfigureAwait(false);
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                CatalogList.ItemsSource = teams;
-                CatalogStatus.Text = teams.Count == 0 ? "No clubs found — check connection and retry" : $"{teams.Count} clubs — select one to star it";
-            });
+            Toggle("Team Game Alerts", "Windows notifications for kickoff, scores and finals from teams you follow.", _settings.LiveGameAlertsEnabled, v => _settings.LiveGameAlertsEnabled = v);
+            Toggle("RedZone Alerts", "Scoring alerts while RedZone is selected in multiview.", _settings.RedZoneAlertsEnabled, v => _settings.RedZoneAlertsEnabled = v);
+            _detail.Children.Add(RallyUi.Text("Notification delivery follows Windows Focus Assist and your system notification settings.", 13, true));
         }
-        catch { DispatcherQueue.TryEnqueue(() => CatalogStatus.Text = "Lookup failed — check connection and retry"); }
+        else if (section == "Your Teams") Teams();
+        else About();
+        _detail.Children.Add(_status);
     }
-
-    private void Catalog_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void MoveSport(string league, int offset)
     {
-        if (CatalogList.SelectedItem is not Team team) return;
-        CatalogList.SelectedItem = null;
-        var league = TeamLeague.SelectedItem as string ?? "";
-        var added = _settings.ToggleFavoriteTeam(new FavoriteTeam(team.Id, league, team.Name, team.Abbreviation, team.LogoUrl));
-        CatalogStatus.Text = added ? $"Added {team.Name}" : $"Removed {team.Name}";
-        RefreshFavorites();
+        var order = HomePage.HomeSports().ToList(); var current = order.IndexOf(league); var target = current + offset;
+        if (current < 0 || target < 0 || target >= order.Count) return; (order[current], order[target]) = (order[target], order[current]); _settings.SportsOrder = order; Show("Appearance");
     }
-    private void RemoveTeam_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    private void Toggle(string title, string description, bool value, Action<bool> save)
     {
-        var key = (sender as Microsoft.UI.Xaml.Controls.Button)?.Tag as string;
-        if (key is null) return;
-        var current = _settings.FavoriteTeamProfiles;
-        current.RemoveAll(t => t.Key == key);
-        _settings.FavoriteTeamProfiles = current;
-        RefreshFavorites();
+        var toggle = new ToggleSwitch { Header = title, IsOn = value }; toggle.Toggled += (_, _) => save(toggle.IsOn);
+        _detail.Children.Add(RallyUi.Column(toggle, RallyUi.Text(description, 12, true)));
     }
-
-    private void Alerts_Toggled(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    private static TextBox Field(string label, string value, bool multiline = false) => new() { Header = label, Text = value, MinWidth = 420, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, MinHeight = multiline ? 100 : 0 };
+    private void Sources()
     {
-        _settings.LiveGameAlertsEnabled = LiveAlerts.IsOn;
-        _settings.RedZoneAlertsEnabled = RedZoneAlerts.IsOn;
-    }
-
-    private void Viewing_Toggled(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-    {
-        _settings.LowLatencyMode = LowLatency.IsOn;
-        _settings.AdaptiveQualityEnabled = AdaptiveQuality.IsOn;
-        _settings.AudioNormalizationEnabled = AudioNormalization.IsOn;
-        _settings.ReducedMotion = ReducedMotion.IsOn;
-        _settings.LargeText = LargeText.IsOn;
-    }
-
-    private async void CheckUpdates_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-    {
-        UpdateStatus.Text = "Checking…";
-        UpdateNotes.Text = "";
-        try
+        _detail.Children.Add(RallyUi.Text("Streaming Addons", 17, false, true));
+        var addons = Field("Stremio manifest URLs — one per line", string.Join("\n", _settings.StremioAddonUrls), true);
+        _detail.Children.Add(addons);
+        _detail.Children.Add(RallyUi.Button("Save Addons", () =>
         {
-            var release = await _updates.CheckAsync().ConfigureAwait(false);
-            if (release is null)
+            var urls = addons.Text.Split('\n').Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+            if (urls.Any(u => UrlNormalizer.NormalizeAddon(u) is null)) { _status.Text = "Check the addon URLs."; return; }
+            _settings.StremioAddonUrls = urls; _settings.SetupComplete = true; App.Data.Addons.Invalidate(); _status.Text = "Addons saved.";
+        }));
+        _detail.Children.Add(RallyUi.Text("Live TV Provider", 17, false, true));
+        var provider = new ComboBox { Header = "Provider", ItemsSource = new[] { "Stalker / Ministra", "Xtream Codes", "M3U / M3U8" }, SelectedIndex = (int)_settings.IptvProvider, Width = 420 };
+        var fields = new StackPanel { Spacing = 16 }; _detail.Children.Add(provider); _detail.Children.Add(fields);
+        void ProviderFields()
+        {
+            fields.Children.Clear();
+            var kind = (IptvProvider)provider.SelectedIndex;
+            var portal = Field("Portal URL", _settings.PortalUrl); var mac = Field("MAC Address", _settings.MacAddress);
+            var serial = Field("Serial Number (optional)", _settings.SerialNumber); var device = Field("Device ID (optional)", _settings.DeviceId);
+            var server = Field("Server URL", _settings.XtreamServerUrl); var user = Field("Username", _settings.XtreamUsername); var password = new PasswordBox { Header = "Password", Password = _settings.XtreamPassword, MinWidth = 420 };
+            var playlist = Field("Playlist URL or local file", _settings.M3uUrl); var guide = Field("XMLTV Guide URL or local file (optional)", _settings.XmltvUrl);
+            if (kind == IptvProvider.Stalker) foreach (var field in new UIElement[] { portal, mac, serial, device }) fields.Children.Add(field);
+            else if (kind == IptvProvider.Xtream) foreach (var field in new UIElement[] { server, user, password }) fields.Children.Add(field);
+            else { fields.Children.Add(playlist); fields.Children.Add(RallyUi.Button("Choose Playlist File…", () => _ = ChoosePlaylist(playlist))); fields.Children.Add(guide); }
+            bool Save()
             {
-                UpdateStatus.Text = $"You're up to date ({RallyInfo.CurrentVersion})";
-                return;
+                var error = SettingsValidator.Validate(kind, portal.Text, mac.Text, server.Text, user.Text, password.Password, _settings.StremioAddonUrls);
+                if (error is not null) { _status.Text = error; return false; }
+                if (kind == IptvProvider.M3u && playlist.Text.Trim().Length == 0) { _status.Text = "Enter a playlist URL or choose a file."; return false; }
+                _settings.IptvProvider = kind; _settings.PortalUrl = portal.Text; _settings.MacAddress = mac.Text; _settings.SerialNumber = serial.Text; _settings.DeviceId = device.Text;
+                _settings.XtreamServerUrl = server.Text; _settings.XtreamUsername = user.Text; _settings.XtreamPassword = password.Password; _settings.M3uUrl = playlist.Text; _settings.XmltvUrl = guide.Text;
+                _settings.AuthToken = ""; _settings.ChannelCacheIdentity = ""; _settings.SetupComplete = true; _status.Text = "Provider saved."; return true;
             }
-            var size = release.AssetSize is long bytes ? $" ({bytes / 1_048_576} MB)" : "";
-            UpdateStatus.Text = $"Update available: {release.Tag}{size} — opening download…";
-            UpdateNotes.Text = release.Notes ?? "";
-            await _updates.OpenReleaseAsync(release).ConfigureAwait(false);
+            fields.Children.Add(RallyUi.Row(RallyUi.Button("Save Provider", () => Save()), RallyUi.Button("Save & Test", async () =>
+            {
+                if (!Save()) return; _status.Text = "Testing connection…";
+                try { var channels = await App.Data.ChannelsAsync(true, _state.Token); _status.Text = channels.Count > 0 ? $"Connected · {channels.Count} channels" : "No channels returned. Check the provider details."; }
+                catch (OperationCanceledException) { }
+                catch { _status.Text = "Connection failed. Check the provider details and network."; }
+            })));
         }
-        catch { UpdateStatus.Text = "Update check failed — retry later"; }
+        provider.SelectionChanged += (_, _) => ProviderFields(); ProviderFields();
+        _detail.Children.Add(RallyUi.Text("Passwords and playlist URLs are encrypted for your Windows account. Addons and providers are supplied by you.", 12, true));
     }
-
-    private void ClearCredentials_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    private async Task ChoosePlaylist(TextBox field)
     {
-        _settings.AuthToken = "";
-        _settings.XtreamPassword = "";
-        _settings.ChannelCacheIdentity = "";
-        XtreamPass.Password = "";
-        Status.Text = "Credentials cleared — Test connection after re-entering them";
+        var picker = new FileOpenPicker(); WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.Window!)); picker.FileTypeFilter.Add(".m3u"); picker.FileTypeFilter.Add(".m3u8");
+        var file = await picker.PickSingleFileAsync(); if (file is not null) field.Text = file.Path;
+    }
+    private void Teams()
+    {
+        _detail.Children.Add(RallyUi.Button("Browse All Teams", () => App.Window?.NavigateTo("leagues")));
+        foreach (var team in _settings.FavoriteTeamProfiles) _detail.Children.Add(RallyUi.Row(RallyUi.Image(team.LogoUrl, 40, 40), RallyUi.Text(team.Name, 15), RallyUi.Button("Unfollow", () => { _settings.ToggleFavoriteTeam(team); Show("Your Teams"); })));
+        if (_settings.FavoriteTeamProfiles.Count == 0) _detail.Children.Add(RallyUi.Text("Follow a team from Leagues to personalize My Rally.", 14, true));
+    }
+    private void About()
+    {
+        _detail.Children.Add(RallyUi.Asset("rally_wordmark.png", 160, 60));
+        _detail.Children.Add(RallyUi.Text($"Rally {RallyInfo.CurrentVersion} · Windows {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}", 16, false, true));
+        _detail.Children.Add(RallyUi.Text("Your sports. One place.\nNative Windows playback, live scores, multiview and your teams.", 14, true));
+        _detail.Children.Add(RallyUi.Button("Check for Updates", async () => { _status.Text = "Checking…"; var release = await new UpdateService().CheckAsync(); _status.Text = release is null ? "No newer release was returned." : $"{release.Tag} is available."; if (release is not null) _detail.Children.Insert(_detail.Children.Count - 1, RallyUi.Button("Download Update", () => _ = new UpdateService().OpenReleaseAsync(release))); }));
+        _detail.Children.Add(RallyUi.Row(RallyUi.Button("Export Preferences…", () => _ = Backup(false)), RallyUi.Button("Import Preferences…", () => _ = Backup(true))));
+        _detail.Children.Add(RallyUi.Text("Backups contain preferences, teams and saved games. Credentials are excluded.", 12, true));
+        _detail.Children.Add(RallyUi.Button("Copy Support Information", () => { var package = new DataPackage(); package.SetText($"Rally {RallyInfo.CurrentVersion}\n{Environment.OSVersion}\nArchitecture: {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}\nProvider: {_settings.IptvProvider}\nAddons: {_settings.StremioAddonUrls.Count}\n{App.Playback.Diagnostics()}"); Clipboard.SetContent(package); _status.Text = "Support information copied. Credentials are excluded."; }));
+        _detail.Children.Add(RallyUi.Button("Clear Cached Sports Data", () => { try { if (Directory.Exists(_settings.CacheDirectory)) Directory.Delete(_settings.CacheDirectory, true); _status.Text = "Cache cleared."; } catch { _status.Text = "Some cached files are in use."; } }));
+        _detail.Children.Add(RallyUi.Button("Rally on GitHub ↗", () => _ = Windows.System.Launcher.LaunchUriAsync(new Uri("https://github.com/shivpatell25/rally-desktop"))));
+    }
+    private async Task Backup(bool import)
+    {
+        try
+        {
+            if (import)
+            {
+                var picker = new FileOpenPicker(); WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.Window!)); picker.FileTypeFilter.Add(".json");
+                var file = await picker.PickSingleFileAsync(); if (file is null) return; var json = await Windows.Storage.FileIO.ReadTextAsync(file); if (json.Length > 1_000_000) throw new InvalidDataException(); _settings.ImportPreferences(json); _status.Text = "Preferences imported.";
+            }
+            else
+            {
+                var picker = new FileSavePicker { SuggestedFileName = "Rally-preferences" }; WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.Window!)); picker.FileTypeChoices.Add("JSON", new List<string> { ".json" });
+                var file = await picker.PickSaveFileAsync(); if (file is null) return; await Windows.Storage.FileIO.WriteTextAsync(file, _settings.ExportPreferences()); _status.Text = "Preferences exported.";
+            }
+        }
+        catch { _status.Text = "The preferences file couldn't be read or saved."; }
     }
 }

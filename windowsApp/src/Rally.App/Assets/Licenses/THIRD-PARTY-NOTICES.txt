@@ -1,0 +1,25 @@
+Rally for Windows bundles:
+
+LibVLC 3.0.24 and its dynamically loaded Windows plugins, distributed by
+VideoLAN.LibVLC.Windows. LibVLC is licensed under LGPL 2.1 or later; individual
+plugins and bundled dependencies retain their respective licenses.
+Source and build information: https://code.videolan.org/videolan/vlc
+Binary package/build scripts: https://code.videolan.org/videolan/libvlc-nuget
+The libraries remain separate DLLs and can be replaced with compatible builds.
+
+LibVLCSharp.WinUI 3.10.1: LGPL 2.1 or later.
+https://code.videolan.org/videolan/LibVLCSharp
+
+SharpDX 4.2.0: MIT license.
+https://github.com/sharpdx/SharpDX/blob/master/LICENSE
+
+Microsoft Windows App SDK and .NET runtime: MIT license and the notices
+provided by their distributable packages.
+https://github.com/microsoft/WindowsAppSDK
+https://github.com/dotnet/runtime
+
+Inter and Sora fonts: SIL Open Font License 1.1.
+Their complete font licenses are included in this folder.
+
+Sports names, logos and downloaded content retain their owners' rights.
+See Rally's content disclosure for data/provider information.

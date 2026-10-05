@@ -12,6 +12,9 @@ on:
 
 jobs:
   core:
+    strategy:
+      matrix:
+        arch: [x64, arm64]
     runs-on: windows-latest
     defaults:
       run:
@@ -24,12 +27,14 @@ jobs:
       - run: dotnet test tests/Rally.Tests -c Release
       # WinUI needs VS AppxPackage tasks: build the app with MSBuild, not dotnet.
       - uses: microsoft/setup-msbuild@v2
-      - run: msbuild src/Rally.App/Rally.App.csproj /p:Configuration=Release /p:Platform=x64 /restore
+      - run: msbuild src/Rally.App/Rally.App.csproj /p:Configuration=Release /p:Platform=${{ matrix.arch }} /p:RuntimeIdentifier=win-${{ matrix.arch }} /restore
       # Side-loadable exe: self-contained publish + zip (unsigned in CI;
       # sign locally with packaging/package.ps1 -SelfSign for your boxes).
-      - run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package.ps1 -Version 0.4.0
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package.ps1 -Version 0.8.0 -Arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: Rally-Windows-x64
+          name: Rally-Windows-${{ matrix.arch }}
           # NOTE: uses: steps ignore defaults.run.working-directory — path from repo root.
-          path: windowsApp/dist/Rally-*-Windows-*.zip
+          path: |
+            windowsApp/dist/Rally-*-Windows-*.zip
+            windowsApp/dist/Rally-*-Windows-*.zip.sha256

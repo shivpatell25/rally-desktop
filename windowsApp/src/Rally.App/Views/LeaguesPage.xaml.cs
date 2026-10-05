@@ -1,70 +1,14 @@
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Rally.Core;
-
+using Rally.App.Design;
 namespace Rally.App.Views;
-
-// Leagues directory. Mirrors Android LeaguesScreen + macOS TvLeaguesHome:
-// one card per EspnClient.Leagues with live/upcoming counts, routing into
-// LeagueCenterPage(league string).
 public sealed partial class LeaguesPage : Page
 {
-    private readonly EspnClient _espn = new(new HttpClient());
-
     public LeaguesPage()
     {
-        InitializeComponent();
-        Loaded += async (_, _) => await RefreshAsync().ConfigureAwait(false);
-    }
-
-    private async Task RefreshAsync()
-    {
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            Spinner.IsActive = true;
-            ErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
-        });
-        try
-        {
-            // Per-league guarded fetch: one league failing (offline) shows zero, page still loads.
-            var tasks = EspnClient.Leagues.Select(async l =>
-            {
-                List<SportEvent> events;
-                try { events = await _espn.FetchScoreboardAsync(l.Sport, l.Path, l.League).ConfigureAwait(false); }
-                catch { events = []; }
-                var live = events.Count(e => e.Status is EventStatus.Live or EventStatus.Halftime);
-                return new LeagueRow(l.League, live, events.Count);
-            });
-            var rows = await Task.WhenAll(tasks).ConfigureAwait(false);
-            DispatcherQueue.TryEnqueue(() => Leagues.ItemsSource = rows.ToList());
-        }
-        catch
-        {
-            // Offline: inline error text, no crash.
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                ErrorText.Text = "League data is unavailable";
-                ErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
-            });
-        }
-        finally
-        {
-            DispatcherQueue.TryEnqueue(() => Spinner.IsActive = false);
-        }
-    }
-
-    private void Leagues_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Leagues.SelectedItem is LeagueRow row)
-        {
-            Leagues.SelectedItem = null;
-            Frame.Navigate(typeof(LeagueCenterPage), row.League);
-        }
-    }
-
-    public sealed record LeagueRow(string League, int LiveCount, int TotalCount)
-    {
-        public string DisplayName => League;
-        public string LiveBadge => LiveCount > 0 ? "● LIVE" : "";
-        public string Summary => TotalCount == 0 ? "OPEN LEAGUE CENTER" : $"{TotalCount} GAMES";
+        InitializeComponent(); var state = new PageState(this); var grid = RallyUi.Columns(4, 18); grid.RowSpacing = 18;
+        var leagues = Rally.Core.EspnClient.Leagues.Select(l => l.League).Prepend("Soccer").Distinct().ToList();
+        for (var i = 0; i < leagues.Count; i++) { if (i % 4 == 0) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); var league = leagues[i]; var card = RallyUi.SportTile(league, () => PageState.Go(typeof(LeagueCenterPage), league)); card.Height = 112; RallyUi.Put(grid, card, i % 4, i / 4); }
+        state.Root.Children.Add(RallyUi.Scroll(RallyUi.Column(RallyUi.Heading("Leagues"), grid)));
     }
 }

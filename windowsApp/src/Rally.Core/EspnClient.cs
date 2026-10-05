@@ -22,20 +22,21 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
         ("Champions League", "soccer", "uefa.champions"),
         ("Serie A", "soccer", "ita.1"),
         ("MLS", "soccer", "usa.1"),
+        ("Tennis", "tennis", "atp"),
+        ("UFC", "mma", "ufc"),
     ];
 
     public async Task<List<SportEvent>> FetchAllAsync(int limit = 100, CancellationToken ct = default)
     {
-        List<SportEvent> fresh = [];
-        try
+        var results = await Task.WhenAll(Leagues.Select(async l =>
         {
-            var tasks = Leagues.Select(l => FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct));
-            var results = await Task.WhenAll(tasks);
-            fresh = results.SelectMany(x => x).OrderBy(e => e.StartTime).ToList();
-        }
-        catch { /* offline: fall through to disk below */ }
-        if (fresh.Count > 0) { _schedule.Save(fresh); return fresh; }
-        return _schedule.LoadFresh() ?? _schedule.LoadAny() ?? [];
+            try { return await FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { return (_schedule.LoadAny() ?? []).Where(e => e.League == l.League).ToList(); }
+        }));
+        var fresh = results.SelectMany(x => x).DistinctBy(e => $"{e.League}:{e.Id}").OrderBy(e => e.StartTime).ToList();
+        if (fresh.Count > 0) _schedule.Save(fresh);
+        return fresh;
     }
 
     public async Task<List<SportEvent>> FetchScoreboardAsync(string sport, string league, string domainLeague, int limit = 100, string? dates = null, CancellationToken ct = default)
@@ -54,14 +55,14 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
         return events;
     }
 
-    private static SportEvent MapEvent(JsonElement e, string domainLeague, string sport)
+    internal static SportEvent MapEvent(JsonElement e, string domainLeague, string sport)
     {
         var comp = e.GetPropertyOrNull("competitions")?.EnumerateArray().FirstOrDefault();
         Team? TeamOf(string homeAway)
         {
             var c = comp?.GetPropertyOrNull("competitors")?.EnumerateArray()
                 .FirstOrDefault(x => x.GetPropertyOrNull("homeAway")?.GetString() == homeAway);
-            var t = c?.GetPropertyOrNull("team");
+            var t = c?.GetPropertyOrNull("team") ?? c?.GetPropertyOrNull("athlete");
             if (t is null) return null;
             return new Team(
                 t.Value.GetPropertyOrNull("id")?.GetString() ?? Guid.NewGuid().ToString(),
@@ -69,7 +70,8 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
                 t.Value.GetPropertyOrNull("abbreviation")?.GetString() ?? "?",
                 t.Value.GetPropertyOrNull("logo")?.GetString(),
                 c?.GetPropertyOrNull("records")?.EnumerateArray()
-                    .Select(r => new TeamRecord(r.GetPropertyOrNull("name")?.GetString(), r.GetPropertyOrNull("summary")?.GetString())).ToList());
+                    .Select(r => new TeamRecord(r.GetPropertyOrNull("name")?.GetString(), r.GetPropertyOrNull("summary")?.GetString())).ToList(),
+                t.Value.GetPropertyOrNull("color")?.GetString(), t.Value.GetPropertyOrNull("alternateColor")?.GetString());
         }
         int? ScoreOf(string homeAway)
         {
@@ -82,7 +84,8 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
         var state = type?.GetPropertyOrNull("state")?.GetString()?.ToLowerInvariant() ?? "";
         var name = type?.GetPropertyOrNull("name")?.GetString()?.ToLowerInvariant() ?? "";
         var completed = type?.GetPropertyOrNull("completed")?.GetBoolean() ?? false;
-        var status = completed || state == "post" ? EventStatus.Finished
+        var status = name.Contains("cancel") ? EventStatus.Canceled : name.Contains("delay") || name.Contains("postpon") ? EventStatus.Delayed
+            : completed || state == "post" ? EventStatus.Finished
             : name.Contains("half") ? EventStatus.Halftime
             : state == "in" ? EventStatus.Live : EventStatus.NotStarted;
         var start = e.GetPropertyOrNull("date")?.GetString() is string d && DateTimeOffset.TryParse(d, out var dt)
@@ -98,7 +101,8 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
             ScoreOf("home"), ScoreOf("away"), sport, domainLeague,
             comp?.GetPropertyOrNull("venue")?.GetPropertyOrNull("fullName")?.GetString(),
             type?.GetPropertyOrNull("shortDetail")?.GetString() ?? type?.GetPropertyOrNull("detail")?.GetString(),
-            broadcasts.Distinct().ToList());
+            broadcasts.Distinct().ToList(),
+            comp?.GetPropertyOrNull("venue")?.GetPropertyOrNull("images")?.EnumerateArray().FirstOrDefault().GetPropertyOrNull("href")?.GetString());
     }
 }
 

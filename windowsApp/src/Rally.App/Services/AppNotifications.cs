@@ -28,12 +28,12 @@ public sealed class AppNotifications(SettingsStore settings)
         IReadOnlySet<string> favIds)
     {
         if (favIds.Count == 0) return [];
-        var prev = previous.ToDictionary(e => e.Id);
+        var prev = previous.DistinctBy(e => $"{e.League}:{e.Id}").ToDictionary(e => $"{e.League}:{e.Id}");
         var out_ = new List<Toast>();
         foreach (var ev in current)
         {
             if (!InvolvesFavorite(ev, favIds)) continue;
-            if (!prev.TryGetValue(ev.Id, out var was)) continue;
+            if (!prev.TryGetValue($"{ev.League}:{ev.Id}", out var was)) continue;
             var title = Describe(ev);
             if (was.Status == EventStatus.NotStarted &&
                 (ev.Status == EventStatus.Live || ev.Status == EventStatus.Halftime))
@@ -59,7 +59,7 @@ public sealed class AppNotifications(SettingsStore settings)
             foreach (var id in _settings.FavoriteTeamProfiles.SelectMany(t => new[] { t.Id })) favIds.Add(id);
             var toasts = Evaluate(_last.Values.ToList(), events, favIds);
             foreach (var toast in toasts) Show(toast.Title, toast.Body, "rally://home");
-            _last = events.ToDictionary(e => e.Id);
+            _last = events.DistinctBy(e => $"{e.League}:{e.Id}").ToDictionary(e => $"{e.League}:{e.Id}");
         }
         catch { /* best-effort */ }
         return Task.CompletedTask;

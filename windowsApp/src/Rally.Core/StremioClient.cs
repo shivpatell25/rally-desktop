@@ -1,116 +1,173 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
-// Stremio addon client. Mirrors StremioApi + StremioRepositoryImpl behavior:
-// header allowlist, isDirectPlayable, 6-catalog / 6-meta discovery caps.
 namespace Rally.Core;
 
 public sealed class StremioClient(HttpClient http)
 {
-    private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
-        { "accept", "accept-language", "authorization", "cookie", "origin", "referer", "user-agent" };
+    private readonly ConcurrentDictionary<string, (JsonElement Root, DateTimeOffset At)> _manifests = new();
+    private readonly ConcurrentDictionary<string, (List<StremioStreamOption> Streams, DateTimeOffset At)> _streams = new();
 
     public async Task<JsonDocument> FetchManifestAsync(string manifestUrl, CancellationToken ct = default)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
-        req.Headers.UserAgent.ParseAdd("Rally/Windows");
-        req.Headers.Accept.ParseAdd("application/json");
-        using var res = await http.SendAsync(req, ct);
-        res.EnsureSuccessStatusCode();
-        return JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+        var normalized = UrlNormalizer.NormalizeAddon(manifestUrl) ?? throw new ArgumentException("Invalid addon URL.");
+        var root = await ManifestAsync(normalized, ct);
+        return JsonDocument.Parse(root.GetRawText());
     }
 
-    public async Task<List<StremioStreamOption>> FindStreamsAsync(SportEvent ev, string addonBase, CancellationToken ct = default)
+    private async Task<JsonElement> ManifestAsync(string url, CancellationToken ct)
     {
-        var manifestUrl = addonBase.EndsWith(".json", StringComparison.Ordinal) ? addonBase : addonBase.TrimEnd('/') + "/manifest.json";
-        using var manifest = await FetchManifestAsync(manifestUrl, ct);
-        var root = manifest.RootElement;
-        var addonName = root.GetPropertyOrNull("name")?.GetString();
-        var baseUrl = manifestUrl.EndsWith("/manifest.json", StringComparison.Ordinal)
-            ? manifestUrl[..^"/manifest.json".Length] : manifestUrl;
-        if (!root.TryGetProperty("catalogs", out var catalogs)) return [];
-        var metas = new List<(string Id, string? Type, string Name)>();
-        foreach (var cat in catalogs.EnumerateArray().Take(6))
-        {
-            var type = cat.GetPropertyOrNull("type")?.GetString();
-            var id = cat.GetPropertyOrNull("id")?.GetString();
-            if (type is null || id is null) continue;
-            List<(string, string?, string)> items;
-            try { items = await FetchCatalogAsync(baseUrl, type, id, ct); }
-            catch { continue; }
-            metas.AddRange(items);
-        }
-        var matches = metas.Where(m =>
-        {
-            var probe = ev with { Id = m.Id, Name = m.Name };
-            return StreamSelector.TextMatchesEvent(m.Name, probe);
-        }).Take(6).ToList();
-        var options = new List<StremioStreamOption>();
-        foreach (var m in matches)
-        {
-            try { options.AddRange(await FetchStreamsAsync(baseUrl, m.Type ?? "sport", m.Id, addonName, ct)); }
-            catch { /* per-addon failure is not fatal */ }
-        }
-        return options;
+        if (_manifests.TryGetValue(url, out var cached) && DateTimeOffset.UtcNow - cached.At < TimeSpan.FromMinutes(30)) return cached.Root;
+        var root = await JsonAsync(url, ct);
+        _manifests[url] = (root, DateTimeOffset.UtcNow); return root;
     }
 
-    private async Task<List<(string Id, string? Type, string Name)>> FetchCatalogAsync(string baseUrl, string type, string id, CancellationToken ct)
+    private async Task<JsonElement> JsonAsync(string url, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/catalog/{type}/{id}.json");
-        req.Headers.UserAgent.ParseAdd("Rally/Windows");
-        using var res = await http.SendAsync(req, ct);
-        res.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-        var out_ = new List<(string, string?, string)>();
-        if (!doc.RootElement.TryGetProperty("metas", out var metas)) return out_;
-        foreach (var m in metas.EnumerateArray())
-        {
-            var mid = m.GetPropertyOrNull("id")?.GetString();
-            var name = m.GetPropertyOrNull("name")?.GetString();
-            if (mid is not null && !string.IsNullOrWhiteSpace(name))
-                out_.Add((mid, m.GetPropertyOrNull("type")?.GetString(), name!));
-        }
-        return out_;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(8));
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.UserAgent.ParseAdd("Rally/Windows"); req.Headers.Accept.ParseAdd("application/json");
+        using var response = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        response.EnsureSuccessStatusCode();
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+        return doc.RootElement.Clone();
     }
 
-    private async Task<List<StremioStreamOption>> FetchStreamsAsync(string baseUrl, string type, string metaId, string? addonName, CancellationToken ct)
+    public Task<List<StremioStreamOption>> FindStreamsAsync(SportEvent ev, string addonBase, CancellationToken ct = default) =>
+        DiscoverAsync(addonBase, ev, ev.Name, ct);
+    public Task<List<StremioStreamOption>> RefreshStreamsAsync(SportEvent ev, string addonBase, CancellationToken ct = default)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/stream/{type}/{metaId}.json");
-        req.Headers.UserAgent.ParseAdd("Rally/Windows");
-        using var res = await http.SendAsync(req, ct);
-        res.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-        var out_ = new List<StremioStreamOption>();
-        if (!doc.RootElement.TryGetProperty("streams", out var streams)) return out_;
-        foreach (var s in streams.EnumerateArray())
-        {
-            var opt = ToOption(s, addonName);
-            if (opt is not null) out_.Add(opt);
-        }
-        return out_;
+        var normalized = UrlNormalizer.NormalizeAddon(addonBase) ?? throw new ArgumentException("Invalid addon URL.");
+        _streams.TryRemove(normalized + "|" + ev.League + ":" + ev.Id, out _);
+        return DiscoverAsync(addonBase, ev, ev.Name, ct);
+    }
+    public Task<List<StremioStreamOption>> SearchAsync(string query, string addonBase, CancellationToken ct = default) =>
+        DiscoverAsync(addonBase, null, query.Trim(), ct);
+
+    private async Task<List<StremioStreamOption>> DiscoverAsync(string addonBase, SportEvent? ev, string query, CancellationToken ct)
+    {
+        var normalized = UrlNormalizer.NormalizeAddon(addonBase) ?? throw new ArgumentException("Invalid addon URL.");
+        var key = normalized + "|" + (ev is null ? query : ev.League + ":" + ev.Id);
+        if (_streams.TryGetValue(key, out var cached) && DateTimeOffset.UtcNow - cached.At < TimeSpan.FromSeconds(90)) return cached.Streams;
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(20));
+        var manifest = await ManifestAsync(normalized, budget.Token);
+        var root = new Uri(normalized);
+        var name = manifest.GetPropertyOrNull("name")?.GetString();
+        var catalogs = manifest.GetPropertyOrNull("catalogs")?.EnumerateArray().ToList() ?? [];
+        var selected = ev is null ? catalogs : catalogs.Where(c => Relevant(c, ev)).ToList();
+        if (selected.Count == 0) selected = catalogs;
+        using var concurrency = new SemaphoreSlim(4);
+        var found = new ConcurrentBag<StremioStreamOption>();
+        await Task.WhenAll(selected.Take(16).Select(async catalog => {
+            var entered = false;
+            try
+            {
+                await concurrency.WaitAsync(budget.Token); entered = true;
+                var type = catalog.GetPropertyOrNull("type")?.GetString() ?? "sport";
+                var id = catalog.GetPropertyOrNull("id")?.GetString(); if (id is null) return;
+                var extras = catalog.GetPropertyOrNull("extra")?.EnumerateArray().ToList() ?? [];
+                var required = new Dictionary<string, string>();
+                foreach (var extra in extras.Where(e => e.GetPropertyOrNull("isRequired")?.GetBoolean() == true))
+                {
+                    var extraName = extra.GetPropertyOrNull("name")?.GetString();
+                    if (extraName is null || extraName == "search") continue;
+                    var option = extra.GetPropertyOrNull("options")?.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : null).FirstOrDefault();
+                    if (extraName == "date") option = (ev?.StartTime ?? DateTimeOffset.UtcNow).ToString("yyyy-MM-dd");
+                    if (option is null) return;
+                    required[extraName] = option;
+                }
+                bool Matches(JsonElement meta)
+                {
+                    var text = (meta.GetPropertyOrNull("name")?.GetString() ?? "") + " " + (meta.GetPropertyOrNull("description")?.GetString() ?? "");
+                    return ev is null ? text.Contains(query, StringComparison.OrdinalIgnoreCase) : MatchesEvent(text, ev);
+                }
+                var metas = new List<JsonElement>();
+                var searchRequired = extras.Any(e => e.GetPropertyOrNull("name")?.GetString() == "search" && e.GetPropertyOrNull("isRequired")?.GetBoolean() == true);
+                if (!searchRequired)
+                {
+                    try { var data = await JsonAsync(ResourceUrl(root, "catalog", type, id, required), budget.Token); metas.AddRange(data.GetPropertyOrNull("metas")?.EnumerateArray().Where(Matches) ?? []); }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                    catch (HttpRequestException) { }
+                }
+                if (metas.Count == 0 && (!catalog.TryGetProperty("extra", out _) || extras.Any(e => e.GetPropertyOrNull("name")?.GetString() == "search")))
+                {
+                    var queries = ev is null ? [query] : new[] { ev.HomeTeam?.Name, ev.AwayTeam?.Name, query }
+                        .OfType<string>().SelectMany(n => new[] { Keywords(n).FirstOrDefault() ?? n, n }).Distinct().Take(5).ToArray();
+                    foreach (var search in queries)
+                    {
+                        if (budget.IsCancellationRequested) break;
+                        var values = new Dictionary<string, string>(required) { ["search"] = search };
+                        try { var data = await JsonAsync(ResourceUrl(root, "catalog", type, id, values), budget.Token); metas.AddRange(data.GetPropertyOrNull("metas")?.EnumerateArray().Where(Matches) ?? []); }
+                        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                        catch (HttpRequestException) { }
+                        if (metas.Count > 0) break;
+                    }
+                }
+                foreach (var meta in metas.DistinctBy(m => m.GetPropertyOrNull("id")?.GetString()).Take(8))
+                {
+                    if (budget.IsCancellationRequested) break;
+                    var metaId = meta.GetPropertyOrNull("id")?.GetString(); if (metaId is null) continue;
+                    try { var data = await JsonAsync(ResourceUrl(root, "stream", meta.GetPropertyOrNull("type")?.GetString() ?? type, metaId), budget.Token);
+                        foreach (var stream in data.GetPropertyOrNull("streams")?.EnumerateArray() ?? []) if (ToOption(stream, name) is { } option) found.Add(option);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                    catch (HttpRequestException) { }
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+            catch (Exception) when (!ct.IsCancellationRequested) { /* isolate malformed catalogs */ }
+            finally { if (entered) concurrency.Release(); }
+        }));
+        ct.ThrowIfCancellationRequested();
+        var result = found.DistinctBy(s => s.StreamUrl, StringComparer.Ordinal).ToList();
+        _streams[key] = (result, DateTimeOffset.UtcNow); return result;
     }
 
+    public void Invalidate() { _streams.Clear(); _manifests.Clear(); }
+
+    private static bool Relevant(JsonElement catalog, SportEvent ev)
+    {
+        var text = ((catalog.GetPropertyOrNull("id")?.GetString() ?? "") + " " + (catalog.GetPropertyOrNull("name")?.GetString() ?? "")).ToLowerInvariant();
+        var terms = ev.League switch { "NFL" or "NCAAF" => new[] { "american", "nfl", "college", "ncaa" },
+            "NBA" or "NCAAB" => ["basket", "nba"], "MLB" => ["baseball", "mlb"], "NHL" => ["hockey", "nhl"], _ => [ev.Sport.ToLowerInvariant(), ev.League.ToLowerInvariant()] };
+        return new[] { "live", "today", "schedule" }.Concat(terms).Any(text.Contains);
+    }
+    private static IEnumerable<string> Keywords(string value) => Regex.Matches(value.ToLowerInvariant(), "[\\p{L}\\p{N}]+")
+        .Select(m => m.Value).Where(w => w.Length >= 3 && !new[] { "state", "university", "college", "city", "united", "the", "and" }.Contains(w));
+    internal static bool MatchesEvent(string text, SportEvent ev)
+    {
+        var words = Keywords(text).ToHashSet();
+        if (ev.HomeTeam is { } home && ev.AwayTeam is { } away)
+        {
+            var h = Keywords(home.Name).ToHashSet(); var a = Keywords(away.Name).ToHashSet();
+            if (h.Except(a).Any(words.Contains) && a.Except(h).Any(words.Contains)) return true;
+            var all = Regex.Matches(text.ToLowerInvariant(), "[\\p{L}\\p{N}]+").Select(m => m.Value).ToHashSet();
+            if (home.Abbreviation != away.Abbreviation && all.Contains(home.Abbreviation.ToLowerInvariant()) && all.Contains(away.Abbreviation.ToLowerInvariant())) return true;
+        }
+        return ev.Name.Length > 5 && text.Contains(ev.Name, StringComparison.OrdinalIgnoreCase);
+    }
+    internal static string ResourceUrl(Uri manifest, string resource, string type, string id, IDictionary<string, string>? extras = null)
+    {
+        var path = manifest.GetLeftPart(UriPartial.Path); path = path[..path.LastIndexOf('/')];
+        var parts = string.Join("/", new[] { resource, type, id }.Select(Uri.EscapeDataString));
+        var filter = extras?.Count > 0 ? "/" + string.Join("&", extras.OrderBy(p => p.Key).Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(p.Value))) : "";
+        return path + "/" + parts + filter + ".json" + manifest.Query;
+    }
     internal static StremioStreamOption? ToOption(JsonElement s, string? addonName)
     {
-        var url = s.GetPropertyOrNull("url")?.GetString();
-        if (string.IsNullOrWhiteSpace(url)) return null;
-        var lower = url.ToLowerInvariant();
-        var isHtml = lower.Contains("youtube.com/watch") || lower.EndsWith(".html") || lower.Contains("external/");
-        var title = string.Join(" ", new[] { s.GetPropertyOrNull("name")?.GetString(), s.GetPropertyOrNull("title")?.GetString() }
-            .Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
-        Dictionary<string, string>? headers = null;
-        if (s.GetPropertyOrNull("behaviorHints")?.GetPropertyOrNull("proxyHeaders")?.GetPropertyOrNull("request") is JsonElement rh
-            && rh.ValueKind == JsonValueKind.Object)
-        {
-            headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in rh.EnumerateObject())
-                if (AllowedHeaders.Contains(p.Name) && p.Value.GetString() is string v)
-                    headers[p.Name] = v;
-            if (headers.Count == 0) headers = null;
-        }
-        return new StremioStreamOption(
-            string.IsNullOrWhiteSpace(title) ? (addonName ?? "Stream") : title,
-            s.GetPropertyOrNull("description")?.GetString(), url,
-            s.GetPropertyOrNull("name")?.GetString(), addonName, headers,
-            !isHtml && s.GetPropertyOrNull("ytId")?.GetString() is null);
+        var title = string.Join(" ", new[] { s.GetPropertyOrNull("name")?.GetString(), s.GetPropertyOrNull("title")?.GetString() }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+        if (title.Contains("🔒") || title.Contains("upgrade to", StringComparison.OrdinalIgnoreCase)) return null;
+        var raw = s.GetPropertyOrNull("url")?.GetString() ?? s.GetPropertyOrNull("externalUrl")?.GetString();
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var url) || url.Scheme is not ("https" or "http")) return null;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (s.GetPropertyOrNull("behaviorHints")?.GetPropertyOrNull("proxyHeaders")?.GetPropertyOrNull("request") is { ValueKind: JsonValueKind.Object } rh)
+            foreach (var p in rh.EnumerateObject()) if (p.Value.ValueKind == JsonValueKind.String) headers[p.Name] = p.Value.GetString()!;
+        var clean = StreamRequestHeaders.Sanitize(headers);
+        var browser = s.GetPropertyOrNull("externalUrl") is not null || url.Host.Contains("youtube.", StringComparison.OrdinalIgnoreCase) || url.AbsolutePath.EndsWith(".html", StringComparison.OrdinalIgnoreCase);
+        return new StremioStreamOption(string.IsNullOrWhiteSpace(title) ? addonName ?? "Stream" : title,
+            s.GetPropertyOrNull("description")?.GetString(), url.AbsoluteUri, s.GetPropertyOrNull("name")?.GetString(), addonName,
+            clean.Count > 0 ? clean : null, !browser && s.GetPropertyOrNull("ytId") is null);
     }
 }

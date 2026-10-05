@@ -3,17 +3,17 @@ namespace Rally.Core;
 
 public enum EventStatus { NotStarted, Live, Halftime, Finished, Delayed, Canceled }
 
-public enum IptvProvider { Stalker, Xtream }
+public enum IptvProvider { Stalker, Xtream, M3u }
 
 public sealed record TeamRecord(string? Name, string? Summary);
 
-public sealed record Team(string Id, string Name, string Abbreviation, string? LogoUrl = null, List<TeamRecord>? Records = null);
+public sealed record Team(string Id, string Name, string Abbreviation, string? LogoUrl = null, List<TeamRecord>? Records = null, string? Color = null, string? AlternateColor = null);
 
 public sealed record PlayerLeader(string Category, string? TeamAbbr, string? TeamLogoUrl, string PlayerShortName, string StatDisplay, string? Position = null, string? HeadshotUrl = null);
 
 public sealed record HighlightClip(string Id, string Title, string? Description = null, int? DurationSeconds = null, string? ThumbnailUrl = null, string? StreamUrl = null, string? WebUrl = null);
 
-public sealed record PlayerStatRow(string DisplayName, string? ShortName = null, string? HeadshotUrl = null, string? Jersey = null, string? Position = null, List<string>? Stats = null);
+public sealed record PlayerStatRow(string DisplayName, string? ShortName = null, string? HeadshotUrl = null, string? Jersey = null, string? Position = null, List<string>? Stats = null, string? Id = null);
 
 public sealed record PlayerStatTable(string? TeamId, string TeamName, string TeamAbbreviation, string? TeamLogoUrl, string? Category, List<string>? Labels, List<PlayerStatRow>? Rows);
 
@@ -21,8 +21,20 @@ public sealed record TeamStatComparison(string Label, string AwayValue, string H
 
 public sealed record GameDetail(List<PlayerLeader> Leaders, List<HighlightClip> Clips, List<PlayerStatTable> PlayerTables, List<TeamStatComparison> TeamStats, List<string> Broadcasts)
 {
+    public List<GamePlay> Plays { get; init; } = [];
+    public GameContext? Context { get; init; }
+    public List<GamePlay> KeyMoments => Plays.Where(p => p.Scoring).OrderByDescending(p => p.Sequence).Take(20).ToList();
     public static GameDetail Empty => new([], [], [], [], []);
 }
+
+public sealed record GamePlay(string Id, string Text, string? Clock, int Period, string? TeamId,
+    bool Scoring, int? AwayScore, int? HomeScore, int Sequence);
+public sealed record GameContext(string? Venue, string? Location, string? VenueImageUrl,
+    string? Weather, string? Situation, string? Drive, double? HomeWinProbability,
+    string? PredictionLabel = null);
+public sealed record GamePlayer(string Id, string TeamId, string TeamName, string TeamAbbreviation,
+    string? TeamLogoUrl, string Name, string? Position, string? Jersey, string? HeadshotUrl,
+    IReadOnlyDictionary<string, string> Stats);
 
 public sealed record StandingRow(string TeamId, string TeamName, string Abbreviation, string? LogoUrl, int Wins, int Losses, int? Ties, string? Pct, string? Gb);
 
@@ -37,7 +49,7 @@ public sealed record SportEvent(
     DateTimeOffset StartTime, EventStatus Status,
     int? ScoreHome, int? ScoreAway,
     string Sport, string League, string? Venue = null, string? GameStatusDetail = null,
-    List<string>? Broadcasts = null);
+    List<string>? Broadcasts = null, string? VenueImageUrl = null);
 
 public sealed record EpgProgram(string Title, string? Description, DateTimeOffset? StartTime, DateTimeOffset? EndTime);
 
@@ -46,7 +58,7 @@ public sealed record ChannelGuide(EpgProgram? Now, EpgProgram? Next, DateTimeOff
 public sealed record IptvChannel(
     string Id, string Number, string Name, string Category = "Live TV",
     string? LogoUrl = null, string? StreamUrl = null, ChannelGuide? Guide = null,
-    bool SupportsCatchUp = false, int? ArchiveDurationHours = null);
+    bool SupportsCatchUp = false, int? ArchiveDurationHours = null, string? GuideId = null);
 
 public sealed record FavoriteTeam(
     string Id, string League, string Name, string Abbreviation,

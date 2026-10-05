@@ -8,11 +8,50 @@ public partial class App : Application
 {
     public static MainWindow? Window { get; private set; }
 
-    private readonly SettingsStore _settings = new();
+    public static RallyRepository Data { get; } = CreateRepository();
+    private static RallyRepository CreateRepository()
+    {
+#if DEBUG
+        if (Environment.GetCommandLineArgs().Contains("--visual-fixture"))
+        {
+            var settings = new SettingsStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rally-QA"));
+            settings.SetupComplete = true; settings.StremioAddonUrls = ["https://fixture.rally.test/manifest.json"];
+            settings.ScoreSaverEnabled = false;
+            return new(settings, new HttpClient(new Testing.FixtureHandler()) { Timeout = TimeSpan.FromSeconds(18) });
+        }
+#endif
+        return new();
+    }
+    public static Services.AppNotifications Notifications { get; } = new(Data.Settings);
+    private readonly DispatcherTimer _alerts = new() { Interval = TimeSpan.FromSeconds(40) };
+    private bool _alertBusy;
+    public static Services.PlaybackSession Playback { get; } = new(Data);
+    private readonly SettingsStore _settings = Data.Settings;
 
     public App()
     {
-        InitializeComponent();
+        UnhandledException += (_, e) => LogCrash(e.Exception);
+        try
+        {
+            InitializeComponent();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            throw;
+        }
+    }
+
+    private static void LogCrash(Exception exception)
+    {
+        try
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rally");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "crash.log"),
+                $"{DateTimeOffset.UtcNow:O}{Environment.NewLine}{exception}");
+        }
+        catch { }
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -29,8 +68,14 @@ public partial class App : Application
             Window.NavigateTo("onboarding");
             Window.SelectNavItem(null);
         }
+        if (_settings.SetupComplete) Window.NavigateTo("home");
         HandleProtocolLaunch(Window);
         Window.Activate();
+        _alerts.Tick += async (_, _) => { if (_alertBusy || !_settings.LiveGameAlertsEnabled) return; _alertBusy = true; try { await Notifications.CheckAndNotifyAsync(await Data.GamesAsync()); } catch { } finally { _alertBusy = false; } }; _alerts.Start();
+        Window.Closed += (_, _) => _alerts.Stop();
+#if DEBUG
+        if (Environment.GetCommandLineArgs().Contains("--visual-fixture")) Testing.QaHarness.Start(Window);
+#endif
     }
 
     // rally:// protocol: rally://event/{id} -> EventDetailPage (event resolved by
@@ -53,6 +98,7 @@ public partial class App : Application
         try
         {
             var path = link["rally://".Length..].Trim('/').Split('/', 2);
+            if (path.Length == 1 && path[0] is "home" or "live") { window.DispatcherQueue.TryEnqueue(() => window.NavigateTo(path[0])); return; }
             if (path.Length != 2) return;
             if (path[0].Equals("event", StringComparison.OrdinalIgnoreCase))
             {
@@ -63,17 +109,13 @@ public partial class App : Application
                 if (ev is null) return;
                 window.DispatcherQueue.TryEnqueue(() =>
                 {
-                    // EventDetailPage (Rally.App.Views, SportEvent param) is sibling-owned;
-                    // fall back to PlayerPage (SportEvent branch) if it hasn't landed yet.
-                    var t = typeof(MainWindow).Assembly.GetType("Rally.App.Views.EventDetailPage")
-                        ?? typeof(PlayerPage);
-                    window.Navigate(t, ev);
+                    window.Navigate(typeof(EventDetailPage), ev);
                 });
             }
             else if (path[0].Equals("player", StringComparison.OrdinalIgnoreCase))
             {
                 var channelId = Uri.UnescapeDataString(path[1]);
-                var channel = new IptvChannel(channelId, "", channelId);
+                var channel = (await Data.ChannelsAsync()).FirstOrDefault(c => c.Id == channelId); if (channel is null) return;
                 window.DispatcherQueue.TryEnqueue(() => window.Navigate(typeof(PlayerPage), channel));
             }
         }

@@ -7,12 +7,24 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
-            <SolidColorBrush x:Key="RallyBackground" Color="#05080F" />
-            <SolidColorBrush x:Key="RallySurface" Color="#111B2A" />
-            <!-- AppleTvTheme tokens: RallyCyan #6FCFF6, RallyLime #EAFB78, LiveRed #FF453A -->
-            <SolidColorBrush x:Key="RallyAccent" Color="#6FCFF6" />
-            <SolidColorBrush x:Key="RallyLime" Color="#EAFB78" />
-            <SolidColorBrush x:Key="RallyLive" Color="#FF453A" />
+            <SolidColorBrush x:Key="RallyBackground" Color="#030709" />
+            <SolidColorBrush x:Key="RallySurface" Color="#AA0A0F13" />
+            <SolidColorBrush x:Key="RallyBorder" Color="#2DA0B4C6" />
+            <SolidColorBrush x:Key="RallyTextSecondary" Color="#A6ADB7" />
+            <SolidColorBrush x:Key="RallyAccent" Color="#F4F5F7" />
+            <SolidColorBrush x:Key="RallyLime" Color="#F4F5F7" />
+            <SolidColorBrush x:Key="RallyLive" Color="#FF3C41" />
+            <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#A6ADB7" />
+            <Color x:Key="SystemAccentColor">#A6ADB7</Color>
+            <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="16,9" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style TargetType="ListView">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

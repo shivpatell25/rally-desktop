@@ -1,81 +1,57 @@
+<img src="Rally_Brand_Kit/02_Wordmark/rally_wordmark_color_transparent_1024.png" alt="Rally" width="320">
 
-<img src="Rally_Brand_Kit/02_Wordmark/rally_wordmark_color_transparent_1024.png" alt="Rally wordmark" width="320">
+## Your sports. One place.
 
-Rally for macOS and Windows. A sports hub that combines ESPN schedules and live data with the user's Stalker/Ministra, Xtream, or M3U IPTV source and configured Stremio addons, then presents matching streams in a cinematic interface. The macOS app combines Rally’s visual identity with native toolbar navigation, menus, settings, AVKit playback, and responsive desktop layouts.
+Rally brings live games, schedules, highlights and your teams into one calm, cinematic desktop app. Connect your own streaming sources, find the game, and keep the action and stats together.
 
-The Android TV implementation is retained under `app/` as the reference platform (`upstream` remote).
+Built for **macOS and Windows**, with Rally’s familiar TV experience adapted for a mouse, keyboard and resizable desktop windows.
 
-## Features
+### Follow the action
 
-- Live and upcoming NFL, NCAAF, NBA, NCAAB, MLB, NHL, soccer, and college events
-- Rally home dashboard, event detail, league center, highlights, and game view
-- Automatic matching between events and IPTV channels with evidence-based quality labels
-- Stalker/Ministra, Xtream Codes, and M3U IPTV provider support
-- Stremio addon stream discovery with header allowlisting and source switching
-- Full-screen playback, in-app updates, and up to four-stream Multi-View
-- ESPN highlight clips, venue/weather/editorial metadata, player headshots, leaders, team comparisons, and formatted stat tables
-- Searchable live-TV channel browser with Now/Next EPG
-- Local caching for channels, manifests, streams, and sports data
-- Keyboard/trackpad/mouse-first on desktop (arrow-key D-pad walk, two-finger or drag shelf paging, space pauses)
+- Live scores and upcoming games across football, basketball, baseball, hockey, soccer, tennis and UFC.
+- Game View puts the stream beside player stats, team comparisons, play-by-play and available win probabilities.
+- Fullscreen playback with pause, restart, audio, captions, source selection and stream diagnostics.
+- Multiview supports up to four tiles. Add streams or a player-stats panel, and choose which game you hear.
+- Follow teams, save upcoming games, browse highlights and search your live-TV channels with Now/Next guide information.
 
-## Layout
+### Connect your sources
 
-- `appleApp/` — macOS SwiftUI app (SwiftPM: `RallyCore` library, `RallyDesktop` app, `SelfTest`, `RallyDesktopTests`)
-- `windowsApp/` — Windows solution (`Rally.sln`: `Rally.Core` net8.0 library, `Rally.App` WinUI 3 app, `Rally.Tests` xUnit)
-- `app/` — Android TV reference implementation
-- `Rally_Brand_Kit/` — wordmarks, marks, backdrops, brand tokens
+Use Stremio streaming addons, Stalker/Ministra, Xtream Codes, or M3U/M3U8 playlists. Optional XMLTV guides bring programme information to playlists.
 
-## macOS
+Rally uses ESPN for sports information. Streaming availability depends on the addons and providers you connect; Rally does not include a TV subscription.
 
-Bundle ID `com.shiv.rally.macos`, macOS 13+.
+### Get Rally
 
-Requirements: full Xcode (macOS SDK; CLT-only builds the core but not tests or signing), SwiftPM (no extra installs — VLCKit and Sparkle 2 resolve via SPM).
+Find published builds on [GitHub Releases](https://github.com/shivpatell25/rally-desktop/releases).
 
-```shell
-cd appleApp
-swift build          # RallyCore + RallyDesktop
-swift test           # unit suite (quality, matcher, providers, updates, summary)
-swift run SelfTest   # dependency-free assert pass
-```
+**macOS:** Open the disk image and move Rally to Applications. Requires macOS 13 or newer.
 
-Debug deep links for verification: `--tv=home|live|schedule|leagues|highlights|myteams`, `--league=NFL`, `--event=<id|first>`, `--play=<id|first>`, `--team=<league:id>`, `--game`, `--settings`, `--skip-onboarding`. Add `--visual-fixture` for stable local sports data and `--window=compact|standard|wide` for deterministic responsive captures. Notifications and browsers can also open `rally://event/<id>` and `rally://team/<league:id>`.
+**Windows preview:** Extract the entire portable ZIP, then open **Rally.App.exe**. Choose **x64** for Intel/AMD PCs or **ARM64** for Windows on ARM. Requires Windows 10 1809 or newer. The app’s runtimes are included. Windows preview packages are unsigned.
 
-Unsigned dev package (signed/notarized DMG needs a Team ID):
+On first launch, open **Settings → Sources** to connect a provider or addon. You can explore scores and schedules before adding a source.
 
-```shell
-./packaging/package.sh 0.7.1   # dist-native/Rally.app + development DMG
-```
+### Desktop controls
 
-In-app updates check `appleApp/appcast.xml` via Sparkle 2 (`SparkleUpdater`), with the GitHub Releases API as fallback (`UpdateChecker`). The Sparkle public key is staged at `appleApp/sparkle_public_key.txt`; the private seed stays out of git (`~/.config/rally-macos/sparkle_private_key`). First signed DMG release adds the enclosure + `edSignature` to the appcast.
+| Action | Windows |
+| --- | --- |
+| Move between controls | Tab / Shift+Tab or arrow keys |
+| Select | Enter or click |
+| Pause / resume in the player | Space |
+| Fullscreen / windowed | F11 |
+| Return | Escape or Alt+Left |
+| Home | Ctrl+Home |
+| Search | Ctrl+F |
 
-## Windows
+On macOS, Rally also supports the native menu bar, toolbar and standard window controls.
 
-Requirements: .NET 8 SDK (`windowsApp/global.json` pins it), VS 2022 with WinAppSDK 1.7 workload for `Rally.App` (WinUI 3, unpackaged, `VideoLAN.LibVLC.Windows` playback).
+### Make it yours
 
-```shell
-cd windowsApp
-dotnet test tests/Rally.Tests -c Release   # core suite
-```
+Settings include sport visibility and ordering, larger text, reduced motion, stronger keyboard focus, spoken score summaries, playback preferences and notifications. Score Saver displays an ambient score screen when you step away. Preference backups keep your teams and settings without exporting credentials.
 
-`Rally.Core` (models, ESPN, Stremio discovery, Stalker/Xtream, resolver, DPAPI-backed settings) builds and tests anywhere .NET 8 runs. `Rally.App` builds on Windows only; CI (`windows.yml`, windows-latest) builds the solution with MSBuild and runs the tests.
+### Privacy and support
 
-## Setup
+Credentials stay on your device using macOS Keychain or Windows account encryption. See the [privacy policy](PRIVACY.md) and [content sources](CONTENT_SOURCES.md).
 
-Open Settings → Sources and choose the IPTV provider. For Stalker/Ministra, enter the portal URL and MAC address supplied by the provider. For Xtream Codes, enter the server URL, username, and password supplied by the provider. Provider details are runtime settings and do not require source edits. Stremio addon manifest URLs can be added from the same screen (a sports addon is preconfigured for testing).
+For help, [open an issue](https://github.com/shivpatell25/rally-desktop/issues) and include your app version and platform. Windows support information can be copied from **Settings → App & About**.
 
-HTTP portals are supported because some legacy Stalker providers do not offer TLS. The settings screen warns when a portal is unencrypted. Prefer HTTPS whenever the provider supports it because HTTP credentials and viewing traffic can be intercepted on the network.
-
-## Performance profile
-
-- Home content appears without waiting for the IPTV catalog
-- Duplicate network loads are coalesced and short-lived caches reduce repeated requests
-- Bundled backdrops bypass the network image pipeline
-- Image, player, and Multi-View buffers are bounded
-- Multi-View streams are capped at four tiles
-- Release desktop builds strip debug symbols and exclude build caches
-
-## Data and privacy
-
-The app does not ship IPTV credentials. Secrets live in Keychain (macOS) or DPAPI-protected storage (Windows). Tokens are not written to logs, release HTTP logging is disabled, and request headers from third-party stream addons are allowlisted before playback. Users are responsible for using subscriptions and addons they are authorized to access.
-
-See the full [privacy policy](PRIVACY.md) and [content/provider disclosure](CONTENT_SOURCES.md).
+For contributors, see [building Rally](docs/BUILDING.md) and the [Windows implementation and validation notes](docs/windows/VALIDATION.md).

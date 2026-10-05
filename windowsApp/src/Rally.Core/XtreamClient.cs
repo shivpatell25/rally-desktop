@@ -133,15 +133,16 @@ public sealed class XtreamClient(HttpClient http, SettingsStore settings)
         return channels;
     }
 
-    public async Task<string> ResolveStreamUrlAsync(string channelId, CancellationToken ct = default)
+    public Task<string> ResolveStreamUrlAsync(string channelId, CancellationToken ct = default)
     {
-        if (channelId.StartsWith("http://") || channelId.StartsWith("https://")) return channelId;
+        if (channelId.StartsWith("http://") || channelId.StartsWith("https://"))
+            return Task.FromResult(channelId);
         var a = CurrentAccount();
-        if (a is null) return channelId;
+        if (a is null) return Task.FromResult(channelId);
         var direct = _channels.FirstOrDefault(c => c.Id == channelId)?.StreamUrl;
-        if (!string.IsNullOrEmpty(direct)) return direct;
+        if (!string.IsNullOrEmpty(direct)) return Task.FromResult(direct);
         var streamId = System.Text.RegularExpressions.Regex.Replace(channelId, "^xtream:", "");
-        return LiveStream(a, streamId) ?? channelId;
+        return Task.FromResult(LiveStream(a, streamId) ?? channelId);
     }
 
     public async Task<ChannelGuide?> GetGuideAsync(string channelId, CancellationToken ct = default)
