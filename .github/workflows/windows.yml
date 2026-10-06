@@ -30,7 +30,7 @@ jobs:
       - run: msbuild src/Rally.App/Rally.App.csproj /p:Configuration=Release /p:Platform=${{ matrix.arch }} /p:RuntimeIdentifier=win-${{ matrix.arch }} /restore
       # Side-loadable exe: self-contained publish + zip (unsigned in CI;
       # sign locally with packaging/package.ps1 -SelfSign for your boxes).
-      - run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package.ps1 -Version 0.8.1 -Arch ${{ matrix.arch }}
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package.ps1 -Version 0.8.2 -Arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: Rally-Windows-${{ matrix.arch }}

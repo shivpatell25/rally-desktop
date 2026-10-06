@@ -12,7 +12,7 @@ public sealed record UpdateCheckResult(UpdateCheckState State, RallyRelease? Rel
 public static class RallyInfo
 {
     // Same train as macOS (packaging/package.sh version argument).
-    public const string CurrentVersion = "0.8.1";
+    public const string CurrentVersion = "0.8.2";
 }
 
 public sealed class UpdateChecker(HttpClient? http = null)
