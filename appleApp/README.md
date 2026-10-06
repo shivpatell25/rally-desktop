@@ -12,7 +12,7 @@ cd appleApp
 swift build
 swift test
 swift run SelfTest --network
-./packaging/package.sh 0.7.1
+./packaging/package.sh 0.8.1
 open dist-native/Rally.app
 ```
 

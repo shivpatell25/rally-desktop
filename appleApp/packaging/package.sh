@@ -2,7 +2,7 @@
 # Assemble a locally signed development app and disk image.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${1:-0.7.1}"
+VERSION="${1:-0.8.1}"
 OUT="${OUT_DIR:-dist-native}"
 swift build -c release
 python3 packaging/assemble.py --configuration release --version "$VERSION" --output "$OUT/Rally.app"

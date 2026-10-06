@@ -1,6 +1,7 @@
 # Rally Release Process
 
-GitHub Releases is Rally’s distribution channel for signed Android TV beta packages.
+GitHub Releases is Rally’s distribution channel for Android TV beta packages and
+the macOS/Windows desktop builds.
 
 ## Required repository secrets
 
@@ -19,18 +20,21 @@ The keystore itself must also be kept in a separate encrypted backup. Every upda
 4. Upload the locally verified signed APK, or manually run the signed-release workflow for that tag after configuring the repository secrets.
 5. Verify the APK signature and SHA-256 digest before announcing the release.
 
-## macOS releases
+## Desktop releases
 
-The macOS 0.7.1 release includes the completed native port and AFK stabilization.
-Run `swift test` in `appleApp/`, then `./packaging/package.sh 0.7.1`.
-Verify the app signature and disk image, sign the exact DMG with the existing
-Sparkle Ed25519 key, and publish its enclosure/signature in `appleApp/appcast.xml`.
-Publish the DMG and checksum in `shivpatell25/rally-desktop`; keep Windows work
-separate until its own validation/release is requested.
+macOS and Windows share one version/tag train in `shivpatell25/rally-desktop`.
+For macOS, run `swift test` in `appleApp/`, then
+`./packaging/package.sh <version>`; this produces an ad-hoc signed development
+DMG. For Windows, run `windowsApp/packaging/package.ps1 -Version <version>` on
+Windows with Visual Studio/MSBuild and the Windows App SDK installed, for both
+`-Arch arm64` and `-Arch x64`. That produces self-contained portable ZIPs. The
+Windows ZIPs are unsigned unless a local signing certificate is explicitly
+used. Run both apps from the produced packages before publishing all three
+assets and a SHA-256 manifest on the matching `v<version>` release.
 
-The current package has an ad-hoc development signature and is not notarized.
-The Sparkle signing key authenticates updates; it is not an Apple Developer ID
-certificate. It remains local and is not stored in GitHub secrets. Android
-signing secrets are configured only in the Rally TV repository.
+The macOS package is not notarized; macOS may require the user to approve or
+open it manually. The Sparkle signing key authenticates staged in-app updates;
+it is not an Apple Developer ID certificate and remains local. Android signing
+secrets are configured only in the Rally TV repository.
 
 Never commit a keystore, password, provider credential, local properties file, or APK.

@@ -3,11 +3,11 @@
   Builds the side-loadable Windows exe: self-contained publish + zip.
   Mirrors appleApp/packaging/package.sh (same $Version train).
 .EXAMPLE
-  powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package.ps1 -Version 0.8.0
-  packaging/package.ps1 -Version 0.8.0 -Arch arm64 -SelfSign
+  powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package.ps1 -Version 0.8.1
+  packaging/package.ps1 -Version 0.8.1 -Arch arm64 -SelfSign
 #>
 param(
-    [string]$Version = "0.8.0",
+    [string]$Version = "0.8.1",
     [ValidateSet("x64", "arm64")]
     [string]$Arch = "x64",
     [switch]$SelfSign
