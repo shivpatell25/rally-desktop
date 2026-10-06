@@ -131,6 +131,7 @@ public sealed partial class MainWindow : Window
     internal bool IdleVisibleForQa => IdleVeil.Visibility == Visibility.Visible;
 #endif
     private int _idleGeneration;
+    private bool _idleLoading;
     private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     public Frame Navigator => ContentFrame;
     public bool IsFullscreen => _fullscreen;
@@ -213,7 +214,11 @@ public sealed partial class MainWindow : Window
     }
     private async Task ShowIdle()
     {
-        if (!CanShowIdle()) return;
+        // The idle timer checks every ten seconds. Once the veil is visible it
+        // needs no refresh, and a slow sports feed must not start a second
+        // scoreboard request on every timer tick.
+        if (!CanShowIdle() || IdleVeil.Visibility == Visibility.Visible || _idleLoading) return;
+        _idleLoading = true;
         try
         {
             var generation = ++_idleGeneration; var games = await App.Data.GamesAsync();
@@ -227,6 +232,7 @@ public sealed partial class MainWindow : Window
             body.VerticalAlignment = VerticalAlignment.Center; body.Margin = new Thickness(48); IdleVeil.Children.Clear(); IdleVeil.Children.Add(body); IdleVeil.Visibility = Visibility.Visible;
         }
         catch { }
+        finally { _idleLoading = false; }
     }
     private bool CanShowIdle() => App.Data.Settings.ScoreSaverEnabled && !App.Playback.IsPlaying
         && ContentFrame.Content is not (PlayerPage or GameViewPage or MultiViewPage or OnboardingPage);
