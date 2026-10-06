@@ -45,6 +45,20 @@ public sealed class PlaybackSession : IAsyncDisposable
         if (_audioName is not null && player.AudioTrackDescription.FirstOrDefault(t => t.Name == _audioName) is { } audio && audio.Name is not null) player.SetAudioTrack(audio.Id);
         if (_captionName is not null && player.SpuDescription.FirstOrDefault(t => t.Name == _captionName) is { } caption && caption.Name is not null) player.SetSpu(caption.Id);
     }
+    private async Task RestoreTracksWhenAvailable(MediaPlayer player, int generation)
+    {
+        // Adaptive streams can announce tracks after Playing. Wait for the
+        // requested names instead of silently losing a selected caption.
+        for (var attempt = 0; attempt < 25; attempt++)
+        {
+            if (_disposed || generation != _generation || !ReferenceEquals(Player, player)) return;
+            RestoreTracks(player);
+            var audioReady = _audioName is null || player.AudioTrackDescription.Any(t => t.Name == _audioName);
+            var captionsReady = _captionName is null || player.SpuDescription.Any(t => t.Name == _captionName);
+            if (audioReady && captionsReady) return;
+            await Task.Delay(200);
+        }
+    }
     public async Task SelectQualityAsync(int height)
     {
         if (Current is null || Loading || height != 0 && !Qualities.Any(q => q.Height == height)) return;
@@ -136,7 +150,7 @@ public sealed class PlaybackSession : IAsyncDisposable
                 PlaybackRequest selectedGame => new[] { selectedGame.Source }.Concat(await _data.SourcesAsync(selectedGame.Game, ct)).DistinctBy(c => c.Url).ToList(),
                 IptvChannel channel => StreamResolver.ChannelCandidates([channel]),
                 PlayCandidate candidate => [candidate],
-                string url when Uri.TryCreate(url, UriKind.Absolute, out _) => [new("clip", "Highlight", url, null, PlayKind.Stremio, true, 0)],
+                string url when Uri.TryCreate(url, UriKind.Absolute, out _) => [new("clip", "Highlight", url, null, PlayKind.Direct, true, 0)],
                 _ => []
             };
             if (ct.IsCancellationRequested || openGeneration != _openGeneration) return;
@@ -201,7 +215,7 @@ public sealed class PlaybackSession : IAsyncDisposable
             if (Player is null)
             {
                 var native = new MediaPlayer(_engine) { EnableKeyInput = false, EnableMouseInput = false, Volume = _volume, Mute = _muted }; Player = native;
-                native.Playing += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = true; Loading = false; Status = Current?.Title ?? "Playing"; App.Window?.DispatcherQueue.TryEnqueue(() => { if (ReferenceEquals(Player, native)) RestoreTracks(native); }); _lastAdvance = DateTimeOffset.UtcNow; if (Current is not null) _data.Settings.RecordStreamSuccess(Current.Url, 0); Notify(); };
+                native.Playing += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = true; Loading = false; Status = Current?.Title ?? "Playing"; App.Window?.DispatcherQueue.TryEnqueue(() => { if (ReferenceEquals(Player, native)) _ = RestoreTracksWhenAvailable(native, generation); }); _lastAdvance = DateTimeOffset.UtcNow; if (Current is not null) _data.Settings.RecordStreamSuccess(Current.Url, 0); Notify(); };
                 native.Paused += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Notify(); }; native.Stopped += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Notify(); };
                 native.EncounteredError += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Loading = false; Status = "This stream couldn't play. Choose another source or retry."; if (Current is not null) _data.Settings.RecordStreamFailure(Current.Url); Notify(); };
                 native.EndReached += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Status = "Playback ended"; Notify(); };
@@ -224,8 +238,21 @@ public sealed class PlaybackSession : IAsyncDisposable
     }
     public void TogglePause() { if (Loading || Player is null || _disposed) return; if (Player.State == VLCState.Ended && !IsLive && Current is not null) { _ = PlayAsync(Current, preserveQuality: true); return; } _wantsPlayback = !_wantsPlayback; Player.SetPause(!_wantsPlayback); _lastAdvance = DateTimeOffset.UtcNow; _healthySince = null; Notify(); }
     public void SetMuted(bool muted) { _muted = muted; if (!_disposed && Player is { } player) player.Mute = muted; }
-    public void Restart() { var timeline = Timeline; if (timeline.CanSeek) Seek(0); else { Status = IsLive ? "This live source does not publish a rewind window." : "Seeking is unavailable for this source."; Notify(); } }
-    public void GoLive() { var timeline = Timeline; if (timeline.IsLive && timeline.CanSeek) Seek(timeline.LiveTarget); }
+    public void Restart()
+    {
+        if (Loading || _disposed) return;
+        if (!IsLive && Player?.State == VLCState.Ended && Current is not null) { _ = PlayAsync(Current, preserveQuality: true); return; }
+        var timeline = Timeline;
+        if (timeline.CanSeek) Seek(0);
+        else { Status = IsLive ? "This live source does not publish a rewind window." : "Seeking is unavailable for this source."; Notify(); }
+    }
+    public void GoLive()
+    {
+        var timeline = Timeline;
+        if (!timeline.IsLive || Loading) return;
+        if (timeline.CanSeek) Seek(timeline.LiveTarget);
+        else if (Current is not null) _ = PlayAsync(Current, renew: true, preserveQuality: true);
+    }
     public void Seek(long milliseconds) { var timeline = Timeline; if (timeline.CanSeek && Player is not null) Player.Time = timeline.ClampSeek(milliseconds); }
     public async Task RetryAsync() { if (Current is not null) await PlayAsync(Current, renew: true); else if (Event is not null) await OpenAsync(Event); }
     public void Tick()

@@ -56,6 +56,8 @@ public sealed class RescueFoundationTests
     public void LiveSeekRequiresAReportedWindowAndClampsToPlayableEdge()
     {
         Assert.False(PlaybackTimeline.Create(true, true, 10_000, 0).CanSeek);
+        var expired = PlaybackTimeline.Create(true, true, 103_000, 80_000);
+        Assert.False(expired.CanSeek); Assert.False(expired.AtLiveEdge);
         var live = PlaybackTimeline.Create(true, true, 30_000, 90_000); Assert.False(live.AtLiveEdge); Assert.Equal(88_500, live.ClampSeek(100_000));
         Assert.True(PlaybackTimeline.Create(true, true, 89_000, 90_000).AtLiveEdge);
         Assert.Equal(90_000, PlaybackTimeline.Create(false, true, 30_000, 90_000).ClampSeek(100_000));

@@ -25,9 +25,8 @@ public sealed class PlaybackSeekBar : Grid
     {
         var timeline = _session.Timeline; _seek.IsEnabled = timeline.CanSeek; _updating = true;
         try { _seek.Maximum = Math.Max(1, timeline.Duration); if (!_dragging && _seek.FocusState != FocusState.Keyboard) _seek.Value = timeline.Position; } finally { _updating = false; }
-        _label.Text = timeline.IsLive ? timeline.AtLiveEdge ? "LIVE · At live edge" : $"LIVE · {Time(timeline.Duration - timeline.Position)} behind · Jump to Live to catch up"
+        _label.Text = timeline.IsLive ? !timeline.CanSeek ? "LIVE · Rewind unavailable · Jump to Live to reconnect" : timeline.AtLiveEdge ? "LIVE · At live edge" : $"LIVE · {Time(timeline.Duration - timeline.Position)} behind · Jump to Live to catch up"
             : timeline.Duration > 0 ? $"{Time(timeline.Position)} / {Time(timeline.Duration)}" : _session.Loading ? "Connecting…" : _session.Status;
-        if (timeline.IsLive && !timeline.CanSeek) _label.Text += " · Rewind is not available";
         _label.MaxLines = 2;
     }
 }

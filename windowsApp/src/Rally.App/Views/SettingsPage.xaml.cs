@@ -25,6 +25,7 @@ public sealed partial class SettingsPage : Page
     }
     private void Show(string section)
     {
+        using var interaction = section == _section ? _state.PreserveInteraction() : null;
         _section = section; _state.Remember("section", section); _detail.Children.Clear(); _status.Text = ""; _detail.Children.Add(RallyUi.Heading(section));
         if (section == "Sources")
         {

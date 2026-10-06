@@ -32,14 +32,15 @@ public sealed partial class MainWindow : Window
         string value => value,
         _ => ""
     });
+    internal long InteractionVersion { get; private set; }
     public async void RestorePageState(Page page)
     {
         if (!_restoreBack || !ReferenceEquals(ContentFrame.Content, page)) return;
-        var route = _route; var generation = ++_restoreGeneration;
+        var route = _route; var generation = ++_restoreGeneration; var inputVersion = InteractionVersion;
         for (var attempt = 0; attempt < 30; attempt++)
         {
             await Task.Delay(100);
-            if (generation != _restoreGeneration || !ReferenceEquals(ContentFrame.Content, page) || route != _route) return;
+            if (generation != _restoreGeneration || !ReferenceEquals(ContentFrame.Content, page) || route != _route || inputVersion != InteractionVersion) return;
             var scroll = Descendants(page).OfType<ScrollViewer>().FirstOrDefault();
             if (scroll is null) continue;
             if (_scrollHistory.TryGetValue(route, out var offset)) { if (scroll.ScrollableHeight < offset && attempt < 29) continue; scroll.ChangeView(null, offset, null, true); }
@@ -135,6 +136,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         App.StartupTrace("Loading window resources"); InitializeComponent(); App.StartupTrace("Window resources loaded");
+        var windowIcon = Path.Combine(AppContext.BaseDirectory, "Assets", "rally.ico");
+        if (File.Exists(windowIcon)) AppWindow.SetIcon(windowIcon);
         _sizing = new(WinRT.Interop.WindowNative.GetWindowHandle(this));
         var dark = 1; DwmSetWindowAttribute(WinRT.Interop.WindowNative.GetWindowHandle(this), 20, ref dark, sizeof(int));
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
@@ -151,6 +154,8 @@ public sealed partial class MainWindow : Window
         var settings = RallyUi.Button("Settings", () => NavigateTo("settings")); settings.Content = new FontIcon { Glyph = "\uE713", FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 16 }; UtilityNav.Children.Add(settings);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName((DependencyObject)UtilityNav.Children[0], "Search");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName((DependencyObject)UtilityNav.Children[1], "Settings");
+        Root.AddHandler(UIElement.PreviewKeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, _) => InteractionVersion++), true);
+        Root.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => InteractionVersion++), true);
         Root.KeyDown += KeyDown;
         Root.PointerMoved += (_, _) => Wake(); Root.PointerPressed += (_, _) => Wake();
         Activated += (_, args) => { if (args.WindowActivationState != WindowActivationState.Deactivated) Wake(); else if (!App.Playback.IsPlaying) _ = ShowIdle(); };

@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using LibVLCSharp.Shared.Structures;
 using Rally.App.Services;
 
 namespace Rally.App.Design;
@@ -50,7 +51,7 @@ public sealed class PlaybackControls : Grid
     {
         _buttons[0].Content = _session.IsPlaying ? "Pause" : "Play"; _buttons[0].IsEnabled = !_session.Loading && _session.Player is not null;
         _buttons[2].IsEnabled = _session.Timeline.CanSeek; _buttons[3].Visibility = _session.IsLive ? Visibility.Visible : Visibility.Collapsed;
-        _buttons[3].IsEnabled = _session.Timeline.CanSeek && !_session.Timeline.AtLiveEdge;
+        _buttons[3].IsEnabled = !_session.Loading && _session.Current is not null && !_session.Timeline.AtLiveEdge;
         _buttons[4].Content = $"Quality · {_session.QualityLabel}";
         _buttons[4].IsEnabled = !_session.Loading; _buttons[5].IsEnabled = _buttons[6].IsEnabled = !_session.Loading && _session.Player is not null;
         var compact = App.Window?.IsCompactOverlay == true;
@@ -72,7 +73,19 @@ public sealed class PlaybackControls : Grid
         var panel = new StackPanel { Spacing = 10 }; var player = _session.Player; var dialog = NewDialog(captions ? "Captions" : "Audio");
         var selected = captions ? player?.Spu : player?.AudioTrack;
         var tracks = _session.Loading ? null : captions ? player?.SpuDescription : player?.AudioTrackDescription;
-        if (tracks is not null) foreach (var track in tracks) { var id = track.Id; var name = track.Name; panel.Children.Add(RallyUi.Button((selected == id ? "✓ " : "") + name, () => { _session.SelectTrack(captions, id, name); dialog.Hide(); })); }
+        static string Label(TrackDescription track, bool captions)
+        {
+            if (track.Id < 0) return "Off";
+            var language = System.Text.RegularExpressions.Regex.Match(track.Name ?? "", @"\[([^\]]+)\]\s*$");
+            if (language.Success) return language.Groups[1].Value;
+            return track.Name?.StartsWith("default-", StringComparison.Ordinal) == true ? $"{(captions ? "Caption" : "Audio")} track {track.Id}" : track.Name ?? $"Track {track.Id}";
+        }
+        if (tracks is not null) foreach (var track in tracks)
+        {
+            var id = track.Id; var name = track.Name; var label = Label(track, captions);
+            if (tracks.Count(t => Label(t, captions) == label) > 1) label += $" · Track {id}";
+            panel.Children.Add(RallyUi.Button((selected == id ? "✓ " : "") + label, () => { _session.SelectTrack(captions, id, name); dialog.Hide(); }));
+        }
         if (panel.Children.Count == 0) panel.Children.Add(RallyUi.Text(captions ? "This source has no caption tracks." : "This source has no alternate audio tracks.", 13, true));
         if (!captions)
         {
@@ -81,7 +94,7 @@ public sealed class PlaybackControls : Grid
             var mute = new ToggleSwitch { Header = "Mute", IsOn = player?.Mute == true }; mute.Toggled += (_, _) => _session.SetMuted(mute.IsOn);
             panel.Children.Add(RallyUi.Text("Volume", 13)); panel.Children.Add(volume); panel.Children.Add(mute);
         }
-        dialog.Content = panel; await RallyUi.ShowDialog(dialog);
+        dialog.Content = new ScrollViewer { MaxHeight = 420, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = panel }; await RallyUi.ShowDialog(dialog);
     }
     public Task Sources() => ShowSources(this, _session);
     public static async Task ShowSources(FrameworkElement owner, PlaybackSession session)

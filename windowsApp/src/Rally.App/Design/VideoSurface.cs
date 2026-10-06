@@ -12,9 +12,13 @@ public sealed class VideoSurface : Grid
     private readonly ProgressRing _loading = new() { IsActive = false, Width = 32, Height = 32 };
     private readonly StackPanel _failure = new() { Spacing = 10 };
     private readonly TextBlock _message = RallyUi.Text("", 12, true);
+    private readonly Button _replay;
     public VideoSurface(PlaybackSession session)
     {
         _session = session;
+        _replay = RallyUi.Button("Watch again", session.Restart);
+        _replay.HorizontalAlignment = HorizontalAlignment.Center; _replay.VerticalAlignment = VerticalAlignment.Center;
+        Children.Add(_replay);
         Children.Add(_loading); _message.HorizontalAlignment = HorizontalAlignment.Center; _message.VerticalAlignment = VerticalAlignment.Bottom; _message.Margin = new Thickness(18); Children.Add(_message);
         var retry = RallyUi.Button("Retry", () => _ = session.RetryAsync());
         var sources = RallyUi.Button("Pick Source", () => _ = PlaybackControls.ShowSources(this, session));
@@ -23,5 +27,11 @@ public sealed class VideoSurface : Grid
         Loaded += (_, _) => { App.Window?.AttachVideo(_session, this); _session.Changed += Update; Update(); };
         Unloaded += (_, _) => { _session.Changed -= Update; App.Window?.DetachVideo(_session, this); };
     }
-    private void Update() { _loading.IsActive = _session.Loading; _message.Text = _session.IsPlaying ? "" : _session.Status; _failure.Visibility = !_session.Loading && !_session.IsPlaying && _session.Player?.State != LibVLCSharp.Shared.VLCState.Paused ? Visibility.Visible : Visibility.Collapsed; }
+    private void Update()
+    {
+        var ended = !_session.IsLive && _session.Player?.State == LibVLCSharp.Shared.VLCState.Ended;
+        _loading.IsActive = _session.Loading; _message.Text = _session.IsPlaying ? "" : _session.Status;
+        _replay.Visibility = ended && !_session.Loading ? Visibility.Visible : Visibility.Collapsed;
+        _failure.Visibility = !ended && !_session.Loading && !_session.IsPlaying && _session.Player?.State != LibVLCSharp.Shared.VLCState.Paused ? Visibility.Visible : Visibility.Collapsed;
+    }
 }

@@ -10,6 +10,7 @@ public sealed class PageState
     private CancellationTokenSource _cancel = new();
     private CancellationTokenSource? _load;
     private int _generation;
+    private static long InputVersion => App.Window?.InteractionVersion ?? 0;
     public CancellationToken Token => _cancel.Token;
     public Grid Root { get; } = new() { Padding = new Thickness(54, 8, 54, 20) };
     public PageState(Page page)
@@ -54,14 +55,27 @@ public sealed class PageState
         var nodes = Children(Root).ToArray();
         var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot) as Control;
         var name = focused?.FocusState == FocusState.Keyboard && nodes.Contains(focused) ? Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(focused) : "";
-        var offset = nodes.OfType<ScrollViewer>().FirstOrDefault()?.VerticalOffset ?? 0;
-        return new RestoreInteraction(() => _page.DispatcherQueue.TryEnqueue(() =>
+        var offsets = nodes.OfType<ScrollViewer>().Select(s => (s.HorizontalOffset, s.VerticalOffset)).ToArray();
+        var inputVersion = InputVersion;
+        return new RestoreInteraction(() => _page.DispatcherQueue.TryEnqueue(async () =>
         {
             if (Token.IsCancellationRequested || Root.XamlRoot is null) return;
             var current = Children(Root).ToArray();
-            current.OfType<ScrollViewer>().FirstOrDefault()?.ChangeView(null, offset, null, true);
+            if (inputVersion != InputVersion) return;
+            var scrolls = current.OfType<ScrollViewer>().ToArray();
+            for (var i = 0; i < Math.Min(scrolls.Length, offsets.Length); i++)
+                scrolls[i].ChangeView(offsets[i].HorizontalOffset, offsets[i].VerticalOffset, null, true);
             if (name.Length > 0 && focused is not null && !current.Contains(focused))
-                current.OfType<Control>().FirstOrDefault(c => Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(c) == name)?.Focus(FocusState.Keyboard);
+                for (var attempt = 0; attempt < 10; attempt++)
+                {
+                    if (Token.IsCancellationRequested || Root.XamlRoot is null) return;
+                    // New controls cannot receive focus until WinUI measures
+                    // them. Do not take focus back after the user moves on.
+                    if (inputVersion != InputVersion) return;
+                    var replacement = Children(Root).OfType<Control>().FirstOrDefault(c => Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(c) == name);
+                    if (replacement is { ActualWidth: > 0, IsEnabled: true } && replacement.Focus(FocusState.Keyboard)) return;
+                    await Task.Delay(50);
+                }
         }));
     }
     public static void Go(Type page, object? param = null) => App.Window?.Navigate(page, param);

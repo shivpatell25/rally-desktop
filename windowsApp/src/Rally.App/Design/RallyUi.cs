@@ -146,7 +146,7 @@ public static class RallyUi
     }
     public static Grid Hero(SportEvent ev, Action watch, Action info, string? imageUrl = null)
     {
-        var grid = new Grid { Height = 258 };
+        var grid = new Grid { MinHeight = 258 };
         grid.Children.Add(new CinematicArtwork(imageUrl ?? ev.VenueImageUrl));
         var status = Text($"{ev.League}  ·  {Status(ev)}", 13, true, true);
         var title = Text(Matchup(ev), 32, false, true); title.FontFamily = TitleFont; title.MaxLines = 2; title.MaxWidth = 650; grid.SizeChanged += (_, args) => title.FontSize = args.NewSize.Height < 170 ? 26 : args.NewSize.Height < 215 ? 30 : args.NewSize.Width >= 1000 ? 42 : 32;

@@ -96,7 +96,13 @@ public sealed partial class LiveTvPage : Page
             var updated = await Task.WhenAll(channels.Select(async channel => { await gate.WaitAsync(_state.Token); try { return channel with { Guide = await App.Data.GuideAsync(channel, _state.Token) }; } catch (OperationCanceledException) { return channel; } catch { return channel; } finally { gate.Release(); } }));
             if (_state.Token.IsCancellationRequested || !ReferenceEquals(_channelRows.Content, list)) return;
             foreach (var channel in updated) { var index = _channels.FindIndex(c => c.Id == channel.Id); if (index >= 0) _channels[index] = channel; }
-            list.ItemsSource = ((IEnumerable<IptvChannel>)list.ItemsSource).Select(c => updated.FirstOrDefault(u => u.Id == c.Id) ?? c).ToList();
+            var current = ((IEnumerable<IptvChannel>)list.ItemsSource).ToList();
+            var next = current.Select(c => updated.FirstOrDefault(u => u.Id == c.Id) ?? c).ToList();
+            // Refresh timestamps alone do not change the guide displayed in
+            // the list. Retain its containers, scroll and keyboard focus.
+            if (current.Zip(next).All(pair => pair.First.Guide?.Now == pair.Second.Guide?.Now && pair.First.Guide?.Next == pair.Second.Guide?.Next)) return;
+            using var interaction = _state.PreserveInteraction();
+            list.ItemsSource = next;
         }
         catch (OperationCanceledException) { }
     }

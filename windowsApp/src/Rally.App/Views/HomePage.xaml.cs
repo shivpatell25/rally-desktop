@@ -120,8 +120,8 @@ public sealed partial class HomePage : Page
     }
     private void ResizeHero()
     {
-        _heroHost.Height = _heroHeight;
-        if (_heroHost.Child is Grid hero) hero.Height = _heroHeight;
+        _heroHost.Height = double.NaN;
+        if (_heroHost.Child is Grid hero) { hero.Height = double.NaN; hero.MinHeight = _heroHeight; }
     }
     private void ResizeRail()
     {
@@ -130,7 +130,7 @@ public sealed partial class HomePage : Page
     private async Task LoadVenue(SportEvent ev)
     {
         var generation = ++_venueGeneration; var token = _state.Token;
-        try { var detail = await App.Data.DetailAsync(ev, ct: token); if (!token.IsCancellationRequested && generation == _venueGeneration && detail.Context?.VenueImageUrl is string url) { using var interaction = _state.PreserveInteraction(); _heroHost.Child = RallyUi.Hero(ev, () => PageState.Watch(ev), () => PageState.Event(ev), url); if (_heroHost.Child is Grid hero) hero.Height = _heroHeight; } } catch (OperationCanceledException) { } catch { /* The current hero remains usable when venue artwork is unavailable. */ }
+        try { var detail = await App.Data.DetailAsync(ev, ct: token); if (!token.IsCancellationRequested && generation == _venueGeneration && detail.Context?.VenueImageUrl is string url) { using var interaction = _state.PreserveInteraction(); _heroHost.Child = RallyUi.Hero(ev, () => PageState.Watch(ev), () => PageState.Event(ev), url); ResizeHero(); } } catch (OperationCanceledException) { } catch { /* The current hero remains usable when venue artwork is unavailable. */ }
     }
     private void BuildLiveRail()
     {
@@ -240,8 +240,8 @@ public sealed partial class HomePage : Page
     private void ShowGuide(bool guide)
     {
         if (_guide == guide) return; _guide = guide;
-        if (!guide) _heroHost.Visibility = Visibility.Visible;
-        RallyUi.Animate(_heroHost, "Height", guide ? 0 : _heroHeight, 300, () => { if (_guide) _heroHost.Visibility = Visibility.Collapsed; });
+        _heroHost.Visibility = guide ? Visibility.Collapsed : Visibility.Visible;
+        if (!guide) ResizeHero();
         _heroHost.IsHitTestVisible = !guide;
         _scheduleTitle.Text = guide ? "TONIGHT’S SCHEDULE" : "STARTING SOON";
         var previousHeight = _upcoming.ActualHeight; BuildUpcoming();

@@ -9,10 +9,12 @@ public sealed record PlaybackQuality(int Height, long Bandwidth);
 public sealed record PlaybackManifestInfo(IReadOnlyList<PlaybackQuality> Qualities, bool? IsLive, Uri? MediaPlaylist = null);
 public sealed record PlaybackTimeline(bool IsLive, bool CanSeek, long Position, long Duration)
 {
-    public bool AtLiveEdge => IsLive && (!CanSeek || Duration - Position <= 5_000);
+    public bool AtLiveEdge => IsLive && CanSeek && Duration - Position <= 5_000;
     public long LiveTarget => Math.Max(0, Duration - 1_500);
     public static PlaybackTimeline Create(bool live, bool seekable, long position, long duration) =>
-        new(live, seekable && duration > 0, Math.Clamp(position, 0, Math.Max(0, duration)), Math.Max(0, duration));
+        // Some rolling streams report an initial window length while time keeps
+        // advancing. That no longer describes a safe seek range.
+        new(live, seekable && duration > 0 && (!live || position <= duration), Math.Clamp(position, 0, Math.Max(0, duration)), Math.Max(0, duration));
     public long ClampSeek(long position) => Math.Clamp(position, 0, IsLive ? LiveTarget : Duration);
 }
 

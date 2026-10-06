@@ -61,7 +61,7 @@ The foundation and feature changes are implemented. Final runtime validation is 
 | Native launches | Repeated launches succeed in Windows 11 ARM64 VM |
 | Home/event/game navigation | Keyboard Watch opens game; event cards open detail; Back and Home shortcuts operate |
 | Search | Typed Chiefs query returns grouped games/teams/sources; team opens; Back restores query and result focus |
-| Schedule | Native date/sport/league controls and event rows visible; duplicate Save control removed; filter interaction pending |
+| Schedule | Native date changed Oct 6 → Oct 5; Baseball/MLB filters return real final games; event opens; Back restores date, filters and row focus |
 | Event hero | Full-width artwork restored; tab strip and Watch/Save controls render |
 | HLS public VOD | Actual Mux Big Buck Bunny sample decoded; 634-second timeline; seekable; no false live timeline; Watch from Start enabled |
 | Quality selection | Manifest choices Auto/1080/720/480/288/184; switched while paused; decoder reports 848×480, paused at 18s after prior 21s position (keyframe rounding) |
@@ -74,8 +74,40 @@ Remaining runtime checks: real-data app screens, all settings categories, save/r
 
 ### Current native validation session
 
-Windows scaling changed through the native Display settings from 125% to 100%. Home renders at 100%, including navigation, hero and event rails. Other screens at 100% and remaining scale levels still need checks. VM display connection stalled during further checks; the guest and read-only app diagnostics remained responsive. The display recovered after a VM restart. Windows is at its PIN sign-in screen; the user has been asked to unlock it for remaining interactive checks. An isolated DEBUG real-data profile is now available for validating production APIs without altering the normal Rally profile.
+Native Display settings have been checked at 100%, 125% and 150%. At 150%, Home, Schedule, league standings/team hubs, Search, My Rally, event detail and Settings render and accept keyboard input. The long UFC Home hero exposed clipped status/action text; its height now grows to fit the actual title and controls. The 200% pass and remaining player layouts are pending. VM display connection stalled during earlier checks; the guest and read-only app diagnostics remained responsive. The display recovered after a VM restart and the user unlocked Windows. Interactive validation has resumed. An isolated DEBUG real-data profile is now available for validating production APIs without altering the normal Rally profile.
 
 Both self-contained Release payloads publish successfully on Windows: win-arm64 and win-x64. The executable and Rally.App.pri are present in each payload. Latest core test rerun: 66 passed, zero failed. Release launch and remaining manual checks are still pending. The later playback ordering fix covers resume and final recovery. It is included in successful fresh Debug ARM64 and Release ARM64/x64 builds; interactive runtime validation remains pending.
 
-Release payload inspection confirms DEBUG test fixtures are excluded and each package contains libvlc.dll for its own architecture. The temporary QA auto-start task was removed. Current rescue checkpoint is on `codex/windows-rescue`; no rescue release has been published. The VM still needs unlocking, and its display scaling is currently 100% (restore 125% after completing scale checks).
+Release payload inspection confirms DEBUG test fixtures are excluded and each package contains libvlc.dll for its own architecture. The temporary QA auto-start task was removed. Current rescue checkpoint is on `codex/windows-rescue`; no rescue release has been published. The VM is unlocked, and its display scaling is currently 150% (restore 125% after completing scale checks).
+
+### Continued playback validation after unlock
+
+- Rolling public HLS: native decoding succeeds (512×288, 30 fps), with an 80-second reported rewind window. Jump to Live seeks successfully and the UI reports the live edge. Extended playback exposed VLC reporting absolute time beyond its original window length. The repair disables invalid rewind instead of clamping to that stale window; Jump to Live reconnects when a verified seek range is unavailable. Regression passes; native extended recheck passed at 111 seconds playback against a reported 74-second window: the UI disables rewind, keeps decoding, and offers reconnect via Jump to Live.
+- DASH: public Akamai Big Buck Bunny MPD decodes natively, reports 634-second VOD duration, and records no playback recovery errors.
+- Fullscreen: F11 opens fullscreen and Escape returns to the normal window.
+- Repaired PiP: native CompactOverlay renders Play/Pause, live action and Return to Window without clipped controls at 100% scaling.
+
+### Real-data and settings interaction pass (October 6)
+
+- Home/API: current sports feed loads, including a long UFC event title; repaired hero shows complete status, metadata, venue and More Info action at 150%.
+- My Rally: saved basketball event survived app launches and VM restart; updated final score loads; Remove immediately returns the intentional empty state.
+- Leagues: NFL standings show 32 teams with current records; team cards open team hubs; Cardinals schedule, roster (82 feed entries) and injuries load. Follow updates immediately and appears in Account.
+- Search: real Chiefs query groups game and team results; team opens; Back restores query and result keyboard focus.
+- Account: native Save As and Open pickers export and import preferences successfully.
+- Playback/Appearance: keyboard toggles are reachable and scroll into view; Home sport enable/disable works. Sport reordering exposed lost focus after rebuilding the panel; interaction preservation is repaired, native recheck pending.
+- IPTV: public M3U sample entered through the UI; Save & Test reports “Connected · 3 channels.” No credentials used.
+- Addon Manifests: public sample manifest entered through the UI; Save & Test reports one connected, zero unavailable/invalid. Both configuration areas show the exact requested legal help text.
+- Updates: live GitHub check reports installed 0.8.0 current; Open Releases launches the correct repository release page.
+- About: support information copies successfully with the credential-exclusion status.
+
+This is ongoing validation. Latest track restoration/replay/live-window fixes, Settings reorder focus, notifications, source switching/recovery, game panels, 200% scaling and fresh Release launch checks remain pending.
+
+### Display interruption and current checkpoint
+
+The VM display and guest agent stalled while Windows Display settings were open over the rolling HLS player. This prevented the reconnect button and 200% checks. Quitting/reopening the UTM controller recovered the VM; Windows now requires the user to sign in. UTM automatic display resizing is temporarily disabled so native resolution selection can be checked after sign-in; restore it after DPI validation, together with the original 125% scaling. This VM failure does not establish a Rally crash; further runtime testing is required.
+
+The shared refresh helper now waits for measured replacement controls, preserves all scroll viewers, and cancels focus restoration if the user has moved on. Settings sport reordering uses this helper. Live TV retains guide containers when the displayed Now/Next programs have not changed; actual guide changes preserve interaction. DEBUG read-only snapshots now include native toggle values, date selectors, list items and open dialogs, excluding editable values and credentials. Native rechecks are pending. Latest macOS core regression rerun: 66 passed, zero failed.
+
+Native core regression rerun after recovery: 66 passed, zero failed. Latest Debug ARM64 compiles the window-wide input version guard; delayed refresh and Back restoration stop when the user interacts anywhere in the window, including the top navigation. Both Release architectures have published successfully during this pass; the final rebuild for that guard succeeded on both architectures. Release fixture exclusion and VLC architecture checks passed for both payloads. The exported native preferences file contains followed teams, saved games and preferences only; no source credentials.
+
+After the user signed in, native interactive validation resumed. Final Release ARM64/x64 package inspection passed again: app/resources present, correct VLC architecture, DEBUG fixtures excluded. A separate TranslucentTB startup diagnostic appeared and was dismissed; it was not a Rally error.

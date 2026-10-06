@@ -75,7 +75,7 @@ public sealed record StremioStreamOption(
     string? Quality = null, string? AddonName = null,
     Dictionary<string, string>? Headers = null, bool IsDirectPlayable = true);
 
-public enum PlayKind { Stremio, Iptv }
+public enum PlayKind { Stremio, Iptv, Direct }
 
 public sealed record PlayCandidate(
     string Id, string Title, string Url,

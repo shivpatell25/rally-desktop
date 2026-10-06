@@ -64,16 +64,16 @@ public sealed partial class EventDetailPage : Page
         foreach (var tab in _tabs) tab.Value.Background = tab.Key == _selected ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(38, 225, 234, 242)) : RallyUi.Surface;
         if (_selected == "Sources")
         {
-            _content.Content = RallyUi.Text("Finding sources…", 14, true);
-            try { var sources = await App.Data.SourcesAsync(_event, _state.Token); if (!_state.Token.IsCancellationRequested && _selected == "Sources" && generation == _renderGeneration) _content.Content = GamePanels.Sources(sources, c => PageState.Go(typeof(GameViewPage), new Services.PlaybackRequest(_event, c))); } catch (OperationCanceledException) { } catch { if (!_state.Token.IsCancellationRequested && generation == _renderGeneration) _content.Content = RallyUi.Empty("Sources are unavailable", "Check your connection and source settings.", "Retry", () => _ = Render()); } return;
+            SetContent(RallyUi.Text("Finding sources…", 14, true));
+            try { var sources = await App.Data.SourcesAsync(_event, _state.Token); if (!_state.Token.IsCancellationRequested && _selected == "Sources" && generation == _renderGeneration) SetContent(GamePanels.Sources(sources, c => PageState.Go(typeof(GameViewPage), new Services.PlaybackRequest(_event, c)))); } catch (OperationCanceledException) { } catch { if (!_state.Token.IsCancellationRequested && generation == _renderGeneration) SetContent(RallyUi.Empty("Sources are unavailable", "Check your connection and source settings.", "Retry", () => _ = Render())); } return;
         }
-        if (_selected == "Stats") { _content.Content = GamePanels.Stats(_event, _detail, false); return; }
-        if (_selected == "Players") { _content.Content = GamePanels.Players(_detail); return; }
-        if (_selected == "Plays") { _content.Content = GamePanels.Plays(_detail.Plays); return; }
-        if (_selected == "Lineups") { _content.Content = GamePanels.Lineups(_detail); return; }
+        if (_selected == "Stats") { SetContent(GamePanels.Stats(_event, _detail, false)); return; }
+        if (_selected == "Players") { SetContent(GamePanels.Players(_detail)); return; }
+        if (_selected == "Plays") { SetContent(GamePanels.Plays(_detail.Plays)); return; }
+        if (_selected == "Lineups") { SetContent(GamePanels.Lineups(_detail)); return; }
         if (_selected == "Highlights")
         {
-            _content.Content = _detail.Clips.Count > 0 ? RallyUi.Flow(_detail.Clips.Select(c => (UIElement)HomePage.ClipCard(c, false)).ToArray()) : RallyUi.Empty("No highlights published", "Clips will appear here when available."); return;
+            SetContent(_detail.Clips.Count > 0 ? RallyUi.Flow(_detail.Clips.Select(c => (UIElement)HomePage.ClipCard(c, false)).ToArray()) : RallyUi.Empty("No highlights published", "Clips will appear here when available.")); return;
         }
 
         var info = RallyUi.Column(RallyUi.Text("Game Info", 19, false, true), RallyUi.Text(_detail.Context?.Venue ?? _event.Venue ?? "Venue to be confirmed", 15),
@@ -90,7 +90,7 @@ public sealed partial class EventDetailPage : Page
         if (players.Children.Count == 1) players.Children.Add(RallyUi.Text("Player stats appear when the game is underway.", 13, true));
         players.Children.Add(RallyUi.Button("See All Players ›", () => { _selected = "Players"; _ = Render(); }));
         var injuries = RallyUi.Column(RallyUi.Text("Injuries / Availability", 19, false, true), RallyUi.Text("Loading availability…", 13, true));
-        var overview = RallyUi.Column(RallyUi.Flow(RallyUi.Panel(info), RallyUi.Panel(form), RallyUi.Panel(players)), RallyUi.Panel(injuries)); _content.Content = overview;
+        var overview = RallyUi.Column(RallyUi.Flow(RallyUi.Panel(info), RallyUi.Panel(form), RallyUi.Panel(players)), RallyUi.Panel(injuries)); SetContent(overview);
         var path = EspnClient.Leagues.FirstOrDefault(l => l.League == _event.League);
         if (path.Path is null) { injuries.Children.RemoveAt(1); injuries.Children.Add(RallyUi.Text("Availability is not published for this competition.", 13, true)); return; }
         var results = await Task.WhenAll(new[] { _event.AwayTeam, _event.HomeTeam }.OfType<Team>().Select(async team =>
@@ -106,5 +106,10 @@ public sealed partial class EventDetailPage : Page
             foreach (var entry in result.Entries) injuries.Children.Add(RallyUi.Column(RallyUi.Text($"{entry.PlayerName} · {entry.Status}", 13), RallyUi.Text(entry.Detail ?? "", 12, true)));
             if (result.Entries.Count == 0) injuries.Children.Add(RallyUi.Text(result.Failed ? "Availability couldn't load. Refresh to retry." : "No injuries reported by this feed.", 12, true));
         }
+    }
+    private void SetContent(UIElement content)
+    {
+        using var interaction = _state.PreserveInteraction();
+        _content.Content = content;
     }
 }
