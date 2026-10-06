@@ -118,6 +118,7 @@ public sealed partial class MainWindow : Window
         }
     }
     private DateTimeOffset _lastInput = DateTimeOffset.UtcNow;
+    private bool _windowActive = true;
     #if DEBUG
     internal async Task CaptureVideoForQa(string path)
     {
@@ -160,7 +161,11 @@ public sealed partial class MainWindow : Window
         Root.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => InteractionVersion++), true);
         Root.KeyDown += KeyDown;
         Root.PointerMoved += (_, _) => Wake(); Root.PointerPressed += (_, _) => Wake();
-        Activated += (_, args) => { if (args.WindowActivationState != WindowActivationState.Deactivated) Wake(); else if (!App.Playback.IsPlaying) _ = ShowIdle(); };
+        Activated += (_, args) =>
+        {
+            _windowActive = args.WindowActivationState != WindowActivationState.Deactivated;
+            if (_windowActive) Wake();
+        };
         AppWindow.Closing += async (_, args) =>
         {
             if (_closeReady) return;
@@ -173,7 +178,7 @@ public sealed partial class MainWindow : Window
             _closeReady = true; Close();
         };
         Closed += (_, _) => { _sizing.Dispose(); _idleTimer.Stop(); };
-        _idleTimer.Tick += (_, _) => { if (!App.Playback.IsPlaying && DateTimeOffset.UtcNow - _lastInput > TimeSpan.FromMinutes(5)) _ = ShowIdle(); };
+        _idleTimer.Tick += (_, _) => { if (_windowActive && !App.Playback.IsPlaying && DateTimeOffset.UtcNow - _lastInput > TimeSpan.FromMinutes(5)) _ = ShowIdle(); };
         _idleTimer.Start();
         ContentFrame.Navigating += (_, args) =>
         {
@@ -234,7 +239,7 @@ public sealed partial class MainWindow : Window
         catch { }
         finally { _idleLoading = false; }
     }
-    private bool CanShowIdle() => App.Data.Settings.ScoreSaverEnabled && !App.Playback.IsPlaying
+    private bool CanShowIdle() => _windowActive && App.Data.Settings.ScoreSaverEnabled && !App.Playback.IsPlaying
         && ContentFrame.Content is not (PlayerPage or GameViewPage or MultiViewPage or OnboardingPage);
     private void Wake() { _idleGeneration++; _lastInput = DateTimeOffset.UtcNow; IdleVeil.Visibility = Visibility.Collapsed; }
     private void Logo_Click(object sender, RoutedEventArgs e) => NavigateTo("home");
