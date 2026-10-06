@@ -11,6 +11,8 @@ public sealed class UpdateService(HttpClient? http = null)
     public Task<RallyRelease?> CheckAsync(CancellationToken ct = default) =>
         _checker.CheckAsync(ct);
 
+    public Task<UpdateCheckResult> CheckStatusAsync(CancellationToken ct = default) => _checker.CheckStatusAsync(ct);
+
     public async Task<bool> OpenReleaseAsync(RallyRelease release)
     {
         try

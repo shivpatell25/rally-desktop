@@ -7,6 +7,7 @@ namespace Rally.Core;
 public sealed class EspnClient(HttpClient http, string? cacheDir = null)
 {
     private readonly ScheduleStore _schedule = new(cacheDir);
+    public IReadOnlyList<string> UnavailableLeagues { get; private set; } = [];
     public const string BaseUrl = "https://site.api.espn.com/apis/site/v2/";
 
     public static readonly (string League, string Sport, string Path)[] Leagues =
@@ -28,14 +29,17 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
 
     public async Task<List<SportEvent>> FetchAllAsync(int limit = 100, CancellationToken ct = default)
     {
+        var cached = _schedule.LoadAny() ?? [];
         var results = await Task.WhenAll(Leagues.Select(async l =>
         {
-            try { return await FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct); }
+            try { return (Games: await FetchScoreboardAsync(l.Sport, l.Path, l.League, limit, null, ct), Failed: (string?)null); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { return (_schedule.LoadAny() ?? []).Where(e => e.League == l.League).ToList(); }
+            catch { return (Games: cached.Where(e => e.League == l.League).ToList(), Failed: (string?)l.League); }
         }));
-        var fresh = results.SelectMany(x => x).DistinctBy(e => $"{e.League}:{e.Id}").OrderBy(e => e.StartTime).ToList();
-        if (fresh.Count > 0) _schedule.Save(fresh);
+        UnavailableLeagues = results.Select(r => r.Failed).OfType<string>().ToList();
+        var fresh = results.SelectMany(x => x.Games).DistinctBy(e => $"{e.League}:{e.Id}").OrderBy(e => e.StartTime).ToList();
+        if (UnavailableLeagues.Count == Leagues.Length && fresh.Count == 0) throw new HttpRequestException("Sports feeds are unavailable.");
+        if (UnavailableLeagues.Count < Leagues.Length) _schedule.Save(fresh);
         return fresh;
     }
 
@@ -49,7 +53,7 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
         res.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
         var events = new List<SportEvent>();
-        if (!doc.RootElement.TryGetProperty("events", out var arr)) return events;
+        if (!doc.RootElement.TryGetProperty("events", out var arr) || arr.ValueKind != JsonValueKind.Array) throw new JsonException("Invalid scoreboard response.");
         foreach (var e in arr.EnumerateArray())
             events.Add(MapEvent(e, domainLeague, sport));
         return events;
@@ -77,7 +81,8 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
         {
             var c = comp?.GetPropertyOrNull("competitors")?.EnumerateArray()
                 .FirstOrDefault(x => x.GetPropertyOrNull("homeAway")?.GetString() == homeAway);
-            var s = c?.GetPropertyOrNull("score")?.GetString();
+            var score = c?.GetPropertyOrNull("score");
+            var s = score?.GetPropertyOrNull("displayValue")?.StringValue() ?? score?.StringValue();
             return int.TryParse(s, out var n) ? n : null;
         }
         var type = comp?.GetPropertyOrNull("status")?.GetPropertyOrNull("type");
@@ -108,6 +113,7 @@ public sealed class EspnClient(HttpClient http, string? cacheDir = null)
 
 internal static class JsonExt
 {
+    public static string? StringValue(this JsonElement el) => el.ValueKind == JsonValueKind.String ? el.GetString() : el.ValueKind == JsonValueKind.Number ? el.GetRawText() : null;
     public static JsonElement? GetPropertyOrNull(this JsonElement el, string name) =>
         el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) ? v : null;
 }

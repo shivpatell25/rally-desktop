@@ -25,7 +25,69 @@ public sealed class PlaybackSession : IAsyncDisposable
     private long _suspendedPosition, _lastFrames;
     private DateTimeOffset? _healthySince;
     private Task? _disposeTask;
-    private int _generation;
+    private int _generation, _openGeneration;
+    private bool? _manifestLive;
+    private int _qualityHeight;
+    private string? _audioName, _captionName;
+    private readonly HashSet<string> _failedSources = [];
+    public IReadOnlyList<PlaybackQuality> Qualities { get; private set; } = [];
+    public string QualityLabel => _qualityHeight > 0 ? $"{_qualityHeight}p" : "Auto";
+    public bool IsLive => _manifestLive ?? (Current?.Channel is not null || Event?.Status is EventStatus.Live or EventStatus.Halftime);
+    public PlaybackTimeline Timeline => PlaybackTimeline.Create(IsLive, !Loading && Player?.IsSeekable == true, Player?.Time ?? 0, Player?.Length ?? 0);
+    public void SelectTrack(bool captions, int id, string name)
+    {
+        if (Loading || Player is null) return;
+        if (captions) { _captionName = name; Player.SetSpu(id); } else { _audioName = name; Player.SetAudioTrack(id); }
+        Notify();
+    }
+    private void RestoreTracks(MediaPlayer player)
+    {
+        if (_audioName is not null && player.AudioTrackDescription.FirstOrDefault(t => t.Name == _audioName) is { } audio && audio.Name is not null) player.SetAudioTrack(audio.Id);
+        if (_captionName is not null && player.SpuDescription.FirstOrDefault(t => t.Name == _captionName) is { } caption && caption.Name is not null) player.SetSpu(caption.Id);
+    }
+    public async Task SelectQualityAsync(int height)
+    {
+        if (Current is null || Loading || height != 0 && !Qualities.Any(q => q.Height == height)) return;
+        var timeline = Timeline; var paused = !_wantsPlayback; _qualityHeight = height;
+        var opening = PlayAsync(Current, renew: false, preserveQuality: true);
+        var generation = _generation;
+        await opening;
+        if (generation != _generation) return;
+        for (var i = 0; i < 150 && generation == _generation && !HasVideoFrames && Player is not null; i++) await Task.Delay(100);
+        if (generation != _generation || Player is null) return;
+        var target = timeline.IsLive ? Math.Max(0, Player.Length - (timeline.Duration - timeline.Position)) : timeline.Position;
+        if (Player.IsSeekable && target > 0) { Player.Time = Timeline.ClampSeek(target); await Task.Delay(600); }
+        if (generation != _generation || Player is null) return;
+        _wantsPlayback = !paused; Player.SetPause(paused); RestoreTracks(Player); Notify();
+    }
+    private async Task ProbeManifest(string url, Dictionary<string, string> headers, int generation, CancellationToken ct)
+    {
+        try
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) return;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            async Task<string?> Read(Uri target)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, target);
+                foreach (var header in headers) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                using var response = await _data.Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                response.EnsureSuccessStatusCode();
+                var type = response.Content.Headers.ContentType?.MediaType ?? "";
+                if (!target.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase) && !target.AbsolutePath.EndsWith(".mpd", StringComparison.OrdinalIgnoreCase) && !type.Contains("mpegurl", StringComparison.OrdinalIgnoreCase) && !type.Contains("dash", StringComparison.OrdinalIgnoreCase)) return null;
+                using var stream = await response.Content.ReadAsStreamAsync(timeout.Token); using var bytes = new MemoryStream();
+                var buffer = new byte[8192]; int count;
+                while ((count = await stream.ReadAsync(buffer, timeout.Token)) > 0) { if (bytes.Length + count > 2_000_000) return null; bytes.Write(buffer, 0, count); }
+                return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
+            }
+            var text = await Read(uri); if (text is null) return;
+            var info = PlaybackManifest.Parse(text, uri);
+            if (info.IsLive is null && info.MediaPlaylist is { } child && await Read(child) is string playlist)
+                info = info with { IsLive = PlaybackManifest.Parse(playlist, child).IsLive };
+            if (generation != _generation || ct.IsCancellationRequested) return;
+            App.Window?.DispatcherQueue.TryEnqueue(() => { if (generation == _generation && !ct.IsCancellationRequested) { Qualities = info.Qualities; _manifestLive = info.IsLive; Notify(); } });
+        }
+        catch { /* Optional manifest metadata never prevents the decoder opening a source. */ }
+    }
     public MediaPlayer? Player { get; private set; }
     public SportEvent? Event { get; private set; }
     public List<PlayCandidate> Candidates { get; private set; } = [];
@@ -51,22 +113,24 @@ public sealed class PlaybackSession : IAsyncDisposable
     public async Task OpenAsync(object? parameter, CancellationToken cancellationToken = default)
     {
         if (_disposed) return;
+        var openGeneration = Interlocked.Increment(ref _openGeneration);
         // A standalone channel/clip is a different playback context from a game,
         // even when an addon returns the same URL for both.
         var sameSource = Event is null && (parameter is PlayCandidate requestedSource && Current?.Url == requestedSource.Url
-            || parameter is string clip && Current?.Url == clip);
+            || parameter is string clip && Current?.Url == clip
+            || parameter is IptvChannel requestedChannel && Current?.Channel?.Id == requestedChannel.Id);
         if (sameSource && _suspended) { await ResumeAsync(); return; }
         if (sameSource && Player is not null) { Notify(); return; }
         if (parameter is SportEvent returning && Event?.Id == returning.Id && Event.League == returning.League && _suspended) { await ResumeAsync(); return; }
         if (parameter is SportEvent ev && Event?.Id == ev.Id && Event.League == ev.League && Player is not null) { Notify(); return; }
         await SuspendAsync();
-        if (_disposed) return;
+        if (_disposed || openGeneration != _openGeneration) return;
         Current = null; Candidates = [];
         _request?.Cancel(); _request?.Dispose(); _request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); var ct = _request.Token;
         Loading = true; Status = "Finding sources…"; Event = parameter is PlaybackRequest selected ? selected.Game : parameter as SportEvent; Notify();
         try
         {
-            Candidates = parameter switch
+            var candidates = parameter switch
             {
                 SportEvent game => await _data.SourcesAsync(game, ct),
                 PlaybackRequest selectedGame => new[] { selectedGame.Source }.Concat(await _data.SourcesAsync(selectedGame.Game, ct)).DistinctBy(c => c.Url).ToList(),
@@ -75,14 +139,17 @@ public sealed class PlaybackSession : IAsyncDisposable
                 string url when Uri.TryCreate(url, UriKind.Absolute, out _) => [new("clip", "Highlight", url, null, PlayKind.Stremio, true, 0)],
                 _ => []
             };
-            if (ct.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested || openGeneration != _openGeneration) return;
+            Candidates = candidates;
             if (Candidates.Count == 0) { Status = "No sources found. Check your addon or IPTV settings."; Loading = false; Notify(); return; }
-            await PlayAsync(parameter is PlaybackRequest choice ? choice.Source : StreamResolver.Primary(Candidates) ?? Candidates[0], ct, renew: parameter is PlaybackRequest);
+            var primary = parameter is PlaybackRequest choice ? choice.Source : StreamResolver.Primary(Candidates);
+            if (primary is null) { Loading = false; Status = "No exact matchup was confirmed. Pick a source to choose a channel."; Notify(); return; }
+            await PlayAsync(primary, ct, renew: parameter is PlaybackRequest);
         }
-        catch (OperationCanceledException) { }
-        catch { if (!ct.IsCancellationRequested && !_disposed) { _switching = false; Loading = false; Status = "Sources couldn't be loaded. Try again or choose another source."; Notify(); } }
+        catch (OperationCanceledException) { if (openGeneration == _openGeneration) { Loading = false; Notify(); } }
+        catch { if (openGeneration == _openGeneration && !ct.IsCancellationRequested && !_disposed) { _switching = false; Loading = false; Status = "Sources couldn't be loaded. Try again or choose another source."; Notify(); } }
     }
-    public async Task PlayAsync(PlayCandidate candidate, CancellationToken ct = default, bool recovery = false, bool renew = false)
+    public async Task PlayAsync(PlayCandidate candidate, CancellationToken ct = default, bool recovery = false, bool renew = false, bool preserveQuality = false)
     {
         if (_disposed) return;
         _playRequest?.Cancel(); _playRequest?.Dispose();
@@ -93,6 +160,8 @@ public sealed class PlaybackSession : IAsyncDisposable
         {
             await _gate.WaitAsync(ct); acquired = true;
             if (generation != _generation) return;
+            if (!preserveQuality && (!recovery || Current?.Url != candidate.Url)) { _qualityHeight = 0; Qualities = []; _manifestLive = null; }
+            if (!recovery) _failedSources.Clear();
             Current = candidate;
             // The window owns the swapchain independently. Recreate the native
             // decoder after stopping it, so seek/restart state cannot leak into
@@ -127,11 +196,12 @@ public sealed class PlaybackSession : IAsyncDisposable
             var headers = StreamRequestHeaders.Sanitize(candidate.Headers);
             if (candidate.Channel is not null && _data.Settings.IptvProvider == IptvProvider.Stalker)
                 foreach (var header in _data.Stalker.PlaybackHeaders()) headers[header.Key] = header.Value;
+            _ = ProbeManifest(url, headers, generation, ct);
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https") { _relay = new(url, headers); url = _relay.Url; }
             if (Player is null)
             {
                 var native = new MediaPlayer(_engine) { EnableKeyInput = false, EnableMouseInput = false, Volume = _volume, Mute = _muted }; Player = native;
-                native.Playing += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = true; Loading = false; Status = Current?.Title ?? "Playing"; _lastAdvance = DateTimeOffset.UtcNow; if (Current is not null) _data.Settings.RecordStreamSuccess(Current.Url, 0); Notify(); };
+                native.Playing += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = true; Loading = false; Status = Current?.Title ?? "Playing"; App.Window?.DispatcherQueue.TryEnqueue(() => { if (ReferenceEquals(Player, native)) RestoreTracks(native); }); _lastAdvance = DateTimeOffset.UtcNow; if (Current is not null) _data.Settings.RecordStreamSuccess(Current.Url, 0); Notify(); };
                 native.Paused += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Notify(); }; native.Stopped += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Notify(); };
                 native.EncounteredError += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Loading = false; Status = "This stream couldn't play. Choose another source or retry."; if (Current is not null) _data.Settings.RecordStreamFailure(Current.Url); Notify(); };
                 native.EndReached += (_, _) => { if (_switching || !ReferenceEquals(Player, native)) return; _playing = false; Status = "Playback ended"; Notify(); };
@@ -142,6 +212,7 @@ public sealed class PlaybackSession : IAsyncDisposable
             // WARP presents video but cannot safely act as a hardware decoder.
             // Explicit software decode avoids its restart/seek device crashes.
             if (_softwareOutput) media.AddOption(":avcodec-hw=none");
+            if (_qualityHeight > 0) { media.AddOption($":adaptive-maxheight={_qualityHeight}"); media.AddOption(":adaptive-logic=highest"); }
             media.AddOption($":network-caching={(_data.Settings.LowLatencyMode ? 650 : 1600)}"); media.AddOption(":http-reconnect");
             if (_data.Settings.AudioNormalizationEnabled) media.AddOption(":audio-filter=normvol");
             _wantsPlayback = true; _suspended = false; _healthySince = null; _lastFrames = 0;
@@ -151,10 +222,11 @@ public sealed class PlaybackSession : IAsyncDisposable
         catch { if (generation == _generation && !_disposed) { _switching = false; Loading = false; Status = "Playback couldn't start. Retry or select another source."; Notify(); } }
         finally { if (acquired) _gate.Release(); }
     }
-    public void TogglePause() { if (Loading || Player is null || _disposed) return; _wantsPlayback = !_wantsPlayback; Player.SetPause(!_wantsPlayback); _lastAdvance = DateTimeOffset.UtcNow; _healthySince = null; Notify(); }
+    public void TogglePause() { if (Loading || Player is null || _disposed) return; if (Player.State == VLCState.Ended && !IsLive && Current is not null) { _ = PlayAsync(Current, preserveQuality: true); return; } _wantsPlayback = !_wantsPlayback; Player.SetPause(!_wantsPlayback); _lastAdvance = DateTimeOffset.UtcNow; _healthySince = null; Notify(); }
     public void SetMuted(bool muted) { _muted = muted; if (!_disposed && Player is { } player) player.Mute = muted; }
-    public void Restart() { if (Loading) return; if (Player?.IsSeekable == true) Player.Time = 0; else { Status = "Restart is unavailable for this live source."; Notify(); } }
-    public void Seek(long milliseconds) { if (Loading) return; if (Player?.IsSeekable == true) Player.Time = Math.Clamp(milliseconds, 0, Math.Max(0, Player.Length)); }
+    public void Restart() { var timeline = Timeline; if (timeline.CanSeek) Seek(0); else { Status = IsLive ? "This live source does not publish a rewind window." : "Seeking is unavailable for this source."; Notify(); } }
+    public void GoLive() { var timeline = Timeline; if (timeline.IsLive && timeline.CanSeek) Seek(timeline.LiveTarget); }
+    public void Seek(long milliseconds) { var timeline = Timeline; if (timeline.CanSeek && Player is not null) Player.Time = timeline.ClampSeek(milliseconds); }
     public async Task RetryAsync() { if (Current is not null) await PlayAsync(Current, renew: true); else if (Event is not null) await OpenAsync(Event); }
     public void Tick()
     {
@@ -163,7 +235,7 @@ public sealed class PlaybackSession : IAsyncDisposable
         if (Loading) { if (now - _lastAdvance > TimeSpan.FromSeconds(30)) Recover(); return; }
         if (player is null) { if (now - _lastAdvance > TimeSpan.FromSeconds(3)) Recover(); return; }
         if (player.State == VLCState.Paused) return;
-        if (player.State == VLCState.Ended && (Event is null || Event.Status == EventStatus.Finished) && Current.Channel is null) return;
+        if (player.State == VLCState.Ended && !IsLive) return;
         var currentTime = player.Time; long frames = 0; var hasVideo = false;
         try { using var media = player.Media; hasVideo = media?.Tracks.Any(t => t.TrackType == TrackType.Video) == true; if (media?.Statistics is MediaStats stats) frames = stats.DisplayedPictures; } catch { }
         if (currentTime != _lastTime && (!hasVideo || frames != _lastFrames))
@@ -180,11 +252,20 @@ public sealed class PlaybackSession : IAsyncDisposable
         try
         {
             _data.Settings.RecordStreamStall(Current.Url);
-            if (_recoveries >= 2) { await SuspendAsync(); _suspended = false; _wantsPlayback = false; Status = "This source stopped updating. Retry or choose another source."; Loading = false; Notify(); return; }
+            if (_recoveries >= 2)
+            {
+                _failedSources.Add(Current.Url);
+                var fallback = Candidates.FirstOrDefault(c => c.ExactMatch && !_failedSources.Contains(c.Url));
+                if (fallback is not null) { _recoveries = 0; await PlayAsync(fallback, recovery: true, renew: true); return; }
+                var stopping = SuspendAsync(); var generation = _generation; await stopping;
+                if (_disposed || generation != _generation) return;
+                _suspended = false; _wantsPlayback = false; Status = "This source stopped updating. Retry or choose another source."; Loading = false; Notify(); return; }
             _recoveries++; await PlayAsync(Current, recovery: true, renew: true);
         }
         finally { _retryPending = false; }
     }
+    public void UpdateEvent(SportEvent game) { if (Event?.Id == game.Id && Event.League == game.League) Event = game; }
+    public async Task RefreshSourcesAsync(CancellationToken ct = default) { if (Event is not null) { var game = Event; var sources = await _data.SourcesAsync(game, ct, refresh: true); if (!ct.IsCancellationRequested && Event == game) { Candidates = sources; Notify(); } } }
     public async Task SuspendAsync()
     {
         if (_disposed) return;
@@ -204,8 +285,9 @@ public sealed class PlaybackSession : IAsyncDisposable
     {
         if (!_suspended || _disposed || Current is null) return;
         var wanted = _wantsPlayback; var position = _suspendedPosition;
-        await PlayAsync(Current, renew: true);
+        var opening = PlayAsync(Current, renew: true, preserveQuality: true);
         var generation = _generation;
+        await opening;
         for (var i = 0; i < 150 && !_disposed && generation == _generation && Player is not null && Player.State is not (VLCState.Playing or VLCState.Error or VLCState.Ended); i++) await Task.Delay(100);
         if (_disposed || generation != _generation || Player is null) return;
         // Playing is raised before the first decoded frame. Pausing immediately
@@ -217,7 +299,7 @@ public sealed class PlaybackSession : IAsyncDisposable
             await Task.Delay(100);
         }
         if (_disposed || generation != _generation || Player is null) return;
-        if ((Event is null || Event.Status == EventStatus.Finished) && Current.Channel is null && Player.IsSeekable && position > 0)
+        if (!IsLive && Player.IsSeekable && position > 0)
         {
             Player.Time = position;
             // HLS seeks are asynchronous. Let decoding reach the saved position

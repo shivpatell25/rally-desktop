@@ -12,13 +12,14 @@ public sealed class RallyRepository
     public StalkerClient Stalker { get; private set; }
     public XtreamClient Xtream { get; private set; }
     public M3uClient Playlists { get; private set; }
-    private readonly SemaphoreSlim _gamesGate = new(1, 1);
+    private readonly AsyncDataCache<List<SportEvent>> _gamesCache = new(TimeSpan.FromSeconds(35));
+    private readonly AsyncDataCache<GameDetail> _details = new(TimeSpan.FromSeconds(35), 256);
+    private readonly AsyncDataCache<List<Team>> _teams = new(TimeSpan.FromHours(4));
+    private readonly AsyncDataCache<List<SportEvent>> _teamGames = new(TimeSpan.FromMinutes(2));
+    private readonly AsyncDataCache<SportsSchedule> _schedule = new(TimeSpan.FromSeconds(35));
     private readonly SemaphoreSlim _channelsGate = new(1, 1);
-    private readonly SemaphoreSlim _detailGate = new(4, 4);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (GameDetail Data, DateTimeOffset At)> _details = new();
-    private List<SportEvent> _games = [];
     private List<IptvChannel> _channels = [];
-    private DateTimeOffset _gamesAt, _channelsAt;
+    private DateTimeOffset _channelsAt;
     private string _sourceIdentity = "";
     public RallyRepository(SettingsStore? settings = null, HttpClient? http = null)
     {
@@ -26,16 +27,35 @@ public sealed class RallyRepository
         Espn = new(Http, Settings.CacheDirectory); Details = new(Http); Addons = new(Http);
         Stalker = new(Http, Settings); Xtream = new(Http, Settings); Playlists = new(Http, Settings);
     }
-    public async Task<List<SportEvent>> GamesAsync(bool refresh = false, CancellationToken ct = default)
+    public Task<List<SportEvent>> GamesAsync(bool refresh = false, CancellationToken ct = default) =>
+        _gamesCache.GetAsync("today", () => Espn.FetchAllAsync(), refresh, ct);
+    public IReadOnlyList<string> UnavailableLeagues => Espn.UnavailableLeagues;
+    public Task<List<Team>> TeamsAsync(string league, CancellationToken ct = default)
     {
-        await _gamesGate.WaitAsync(ct);
-        try
+        var path = EspnClient.Leagues.FirstOrDefault(l => l.League == league);
+        return path.Path is null ? Task.FromResult(new List<Team>()) : _teams.GetAsync(league, () => Details.FetchTeamsAsync(path.Sport, path.Path), false, ct);
+    }
+    public Task<List<SportEvent>> TeamGamesAsync(FavoriteTeam team, CancellationToken ct = default)
+    {
+        var path = EspnClient.Leagues.FirstOrDefault(l => l.League == team.League);
+        return path.Path is null ? Task.FromResult(new List<SportEvent>()) : _teamGames.GetAsync(team.Key, () => Details.FetchTeamScheduleAsync(path.Sport, path.Path, team.League, team.Id), false, ct);
+    }
+    public Task<SportsSchedule> ScheduleAsync(DateTimeOffset date, string? sport = null, string? league = null, bool refresh = false, CancellationToken ct = default) =>
+        _schedule.GetAsync($"{date:yyyyMMdd}|{sport}|{league}", async () =>
         {
-            if (!refresh && DateTimeOffset.UtcNow - _gamesAt < TimeSpan.FromSeconds(35)) return _games.ToList();
-            _games = await Espn.FetchAllAsync(ct: ct); _gamesAt = DateTimeOffset.UtcNow;
-            return _games.ToList();
-        }
-        finally { _gamesGate.Release(); }
+            var requested = EspnClient.Leagues.Where(l => (sport is null || l.Sport == sport) && (league is null || l.League == league)).ToList();
+            var results = await Task.WhenAll(requested.Select(async l =>
+            {
+                try { return (Games: await Espn.FetchScoreboardAsync(l.Sport, l.Path, l.League, dates: date.ToString("yyyyMMdd")), Failed: (string?)null); }
+                catch { return (Games: new List<SportEvent>(), Failed: (string?)l.League); }
+            }));
+            if (results.Length > 0 && results.All(r => r.Failed is not null)) throw new HttpRequestException("The schedule feeds are unavailable.");
+            return new SportsSchedule(results.SelectMany(r => r.Games).DistinctBy(e => $"{e.League}:{e.Id}").OrderBy(e => e.StartTime).ToList(), results.Select(r => r.Failed).OfType<string>().ToList());
+        }, refresh, ct);
+    public void ClearSportsCache()
+    {
+        _gamesCache.Clear(); _details.Clear(); _schedule.Clear(); _teams.Clear(); _teamGames.Clear();
+        if (Directory.Exists(Settings.CacheDirectory)) Directory.Delete(Settings.CacheDirectory, true);
     }
     public async Task<List<IptvChannel>> ChannelsAsync(bool refresh = false, CancellationToken ct = default)
     {
@@ -66,28 +86,20 @@ public sealed class RallyRepository
         }
         finally { _channelsGate.Release(); }
     }
-    public async Task<GameDetail> DetailAsync(SportEvent ev, bool refresh = false, CancellationToken ct = default)
+    public Task<GameDetail> DetailAsync(SportEvent ev, bool refresh = false, CancellationToken ct = default)
     {
-        var key = $"{ev.League}:{ev.Id}";
-        if (!refresh && _details.TryGetValue(key, out var cached) && DateTimeOffset.UtcNow - cached.At < TimeSpan.FromSeconds(40)) return cached.Data;
         var path = EspnClient.Leagues.FirstOrDefault(l => l.League == ev.League);
-        if (path.Path is null) return GameDetail.Empty;
-        await _detailGate.WaitAsync(ct);
-        try
-        {
-            if (!refresh && _details.TryGetValue(key, out cached) && DateTimeOffset.UtcNow - cached.At < TimeSpan.FromSeconds(40)) return cached.Data;
-            var detail = await Details.FetchSummaryAsync(path.Sport, path.Path, ev.Id, ev.AwayTeam?.Abbreviation, ev.HomeTeam?.Abbreviation, ct);
-            _details[key] = (detail, DateTimeOffset.UtcNow); return detail;
-        }
-        finally { _detailGate.Release(); }
+        if (path.Path is null) return Task.FromResult(GameDetail.Empty);
+        return _details.GetAsync($"{ev.League}:{ev.Id}", () => Details.FetchSummaryAsync(path.Sport, path.Path, ev.Id, ev.AwayTeam?.Abbreviation, ev.HomeTeam?.Abbreviation), refresh, ct);
     }
     public async Task<List<PlayCandidate>> SourcesAsync(SportEvent ev, CancellationToken ct = default, bool refresh = false)
     {
-        var addonsTask = Task.WhenAll(Settings.StremioAddonUrls.Select(async url =>
+        var failed = 0; var configured = Settings.StremioAddonUrls.ToArray();
+        var addonsTask = Task.WhenAll(configured.Select(async url =>
         {
             try { return refresh ? await Addons.RefreshStreamsAsync(ev, url, ct) : await Addons.FindStreamsAsync(ev, url, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { return new List<StremioStreamOption>(); }
+            catch { Interlocked.Increment(ref failed); return new List<StremioStreamOption>(); }
         }));
         var channelsTask = ChannelsAsync(ct: ct);
         List<IptvChannel> channels;
@@ -95,6 +107,7 @@ public sealed class RallyRepository
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { channels = []; }
         var options = (await addonsTask).SelectMany(x => x).ToList();
+        if (configured.Length > 0 && failed == configured.Length && channels.Count == 0) throw new HttpRequestException("Configured sources are unavailable.");
         return StreamResolver.Candidates(ev, channels, options, url => Settings.AdaptiveQualityEnabled ? Settings.GetStreamHealth(url).Score : 0, ev.Broadcasts);
     }
     public async Task<string> StreamUrlAsync(PlayCandidate candidate, CancellationToken ct = default) =>

@@ -21,7 +21,7 @@ public sealed partial class HomePage : Page
     private readonly List<Button> _upcomingButtons = [];
     private List<SportEvent> _events = [], _live = [], _soon = [];
     private List<HighlightClip> _clips = [];
-    private bool _guide;
+    private bool _guide, _refreshing;
     private double _heroHeight = 210;
     private bool _compactLayout;
     private double GuideRowHeight => ActualHeight < 680 ? 34 : 52;
@@ -40,9 +40,10 @@ public sealed partial class HomePage : Page
         _refresh.Tick += async (_, _) => { try { await RefreshSnapshot(); } catch (OperationCanceledException) { } catch { } };
         SizeChanged += (_, args) =>
         {
+            using var interaction = _state.PreserveInteraction();
             _heroHeight = Math.Clamp(args.NewSize.Height - 386, 142, 258);
             if (!_guide) ResizeHero();
-            ResizeRail();
+            ResizeRail(); if (_body.Children.Count > 0) BuildUpcoming();
             var compact = args.NewSize.Height < 680;
             if (_body.Children.Count > 0 && compact != _compactLayout)
             {
@@ -51,12 +52,12 @@ public sealed partial class HomePage : Page
             }
         };
         Loaded += (_, _) => _refresh.Start(); Unloaded += (_, _) => _refresh.Stop();
-        PointerWheelChanged += (_, e) => { var delta = e.GetCurrentPoint(this).Properties.MouseWheelDelta; ShowGuide(delta < 0); e.Handled = true; };
+
     }
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         _state.Activate();
-        if (_body.Children.Count > 0) { BuildSports(); await RefreshSnapshot(); return; }
+        if (_body.Children.Count > 0) { BuildSports(); try { await RefreshSnapshot(); } catch (OperationCanceledException) { } catch { } return; }
         await _state.Load(async ct =>
         {
             _events = await App.Data.GamesAsync(ct: ct);
@@ -65,7 +66,7 @@ public sealed partial class HomePage : Page
             if (_live.Count == 0)
             {
                 var recent = _events.Where(ev => ev.Status == EventStatus.Finished).OrderByDescending(ev => ev.StartTime).Take(8);
-                var details = await Task.WhenAll(recent.Select(ev => App.Data.DetailAsync(ev, ct: ct)));
+                var details = await Task.WhenAll(recent.Select(async ev => { try { return await App.Data.DetailAsync(ev, ct: ct); } catch { return GameDetail.Empty; } }));
                 _clips = details.SelectMany(d => d.Clips).DistinctBy(c => c.Id).ToList(); _railTitle = "Recent Highlights";
             }
             Build(); var scroll = RallyUi.Scroll(_body); scroll.Padding = new Thickness(0); return scroll;
@@ -73,23 +74,28 @@ public sealed partial class HomePage : Page
     }
     private async Task RefreshSnapshot()
     {
-        var events = await App.Data.GamesAsync(ct: _state.Token); if (_state.Token.IsCancellationRequested) return;
-        var live = events.Where(ev => ev.Status is EventStatus.Live or EventStatus.Halftime).ToList();
-        var changed = !_live.Select(g => $"{g.League}:{g.Id}").SequenceEqual(live.Select(g => $"{g.League}:{g.Id}"));
-        _events = events; await App.Notifications.CheckAndNotifyAsync(events);
-        _soon = events.Where(ev => ev.Status == EventStatus.NotStarted && ev.StartTime >= DateTimeOffset.Now.AddMinutes(-15)).OrderBy(ev => ev.StartTime).Take(4).ToList();
-        BuildUpcoming();
-        if (_guide) _upcoming.Height = Math.Max(48, _soon.Count * GuideRowHeight);
-        if (changed)
+        if (_refreshing || _state.Token.IsCancellationRequested) return; _refreshing = true;
+        try
         {
-            _venueGeneration++;
-            _live = live; _livePage = 0;
-            if (live.Count == 0) { var details = await Task.WhenAll(events.Where(g => g.Status == EventStatus.Finished).OrderByDescending(g => g.StartTime).Take(8).Select(g => App.Data.DetailAsync(g, ct: _state.Token))); _clips = details.SelectMany(d => d.Clips).DistinctBy(c => c.Id).ToList(); }
-            if (_state.Token.IsCancellationRequested) return; _railTitle = live.Count > 0 ? "Live Now" : "Recent Highlights"; _liveHeader.Children.Clear(); _liveHeader.Children.Add(RallyUi.SectionHeader(_railTitle, "See All ›", () => App.Window?.NavigateTo(live.Count > 0 ? "live" : "highlights"))); BuildLiveRail();
-            var featured = live.FirstOrDefault() ?? _soon.FirstOrDefault() ?? events.OrderByDescending(g => g.StartTime).FirstOrDefault();
-            if (featured is not null) { _heroHost.Child = RallyUi.Hero(featured, () => PageState.Watch(featured), () => PageState.Event(featured)); if (_heroHost.Child is Grid hero) hero.Height = _heroHeight; if (featured.VenueImageUrl is null) _ = LoadVenue(featured); }
+            var events = await App.Data.GamesAsync(ct: _state.Token); if (_state.Token.IsCancellationRequested) return;
+            _events = events; _live = events.Where(ev => ev.Status is EventStatus.Live or EventStatus.Halftime).ToList();
+            _soon = events.Where(ev => ev.Status == EventStatus.NotStarted && ev.StartTime >= DateTimeOffset.Now.AddMinutes(-15)).OrderBy(ev => ev.StartTime).Take(4).ToList();
+            _livePage = Math.Min(_livePage, Math.Max(0, (_live.Count - 1) / 3));
+            if (_live.Count == 0)
+            {
+                var details = await Task.WhenAll(events.Where(g => g.Status == EventStatus.Finished).OrderByDescending(g => g.StartTime).Take(8).Select(async g => { try { return await App.Data.DetailAsync(g, ct: _state.Token); } catch { return GameDetail.Empty; } }));
+                if (_state.Token.IsCancellationRequested) return; _clips = details.SelectMany(d => d.Clips).DistinctBy(c => c.Id).ToList();
+            }
+            using var interaction = _state.PreserveInteraction();
+            _railTitle = _live.Count > 0 ? "Live Now" : "Recent Highlights";
+            _liveHeader.Children.Clear(); _liveHeader.Children.Add(RallyUi.SectionHeader(_railTitle, "See All ›", () => App.Window?.NavigateTo(_live.Count > 0 ? "live" : "highlights")));
+            BuildLiveRail(); BuildUpcoming(); BuildSports();
+            var featured = _live.FirstOrDefault() ?? _soon.FirstOrDefault() ?? events.OrderByDescending(g => g.StartTime).FirstOrDefault();
+            if (featured is not null) { _venueGeneration++; _heroHost.Child = RallyUi.Hero(featured, () => PageState.Watch(featured), () => PageState.Event(featured)); ResizeHero(); _ = LoadVenue(featured); }
+            await App.Notifications.CheckAndNotifyAsync(events);
         }
-        else foreach (var card in _rail.Children.OfType<Button>()) { var name = Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(card); var game = events.FirstOrDefault(g => RallyUi.Matchup(g) == name); if (game is not null) { var replacement = RallyUi.EventCard(game, () => { }); var content = replacement.Content; replacement.Content = null; card.Content = content; } } ResizeRail();
+        finally { _refreshing = false; }
+
     }
 #if DEBUG
     internal Task RefreshForQa() => RefreshSnapshot();
@@ -110,7 +116,7 @@ public sealed partial class HomePage : Page
         var full = RallyUi.Button("SEE FULL SCHEDULE ›", () => App.Window?.NavigateTo("schedule")); full.FontSize = 11; full.HorizontalAlignment = HorizontalAlignment.Right; full.Margin = new Thickness(0, -10, 0, 8); scheduleHead.Children.Add(full);
         var upcomingSection = RallyUi.Column(scheduleHead, _upcoming); upcomingSection.Spacing = 0; upcomingSection.Margin = new Thickness(0, 14, 0, 0); RallyUi.Put(_body, upcomingSection, 0, 2);
         _ = Services.ScoreAnnouncer.Announce(_live);
-        BuildUpcoming(); BuildSports(); RallyUi.Put(_body, _sports, 0, 3); _sports.Visibility = Visibility.Collapsed; _sports.Margin = new Thickness(0, 24, 0, 0);
+        BuildUpcoming(); BuildSports(); RallyUi.Put(_body, _sports, 0, 3); _sports.Visibility = Visibility.Visible; _sports.Margin = new Thickness(0, 24, 0, 0);
     }
     private void ResizeHero()
     {
@@ -124,7 +130,7 @@ public sealed partial class HomePage : Page
     private async Task LoadVenue(SportEvent ev)
     {
         var generation = ++_venueGeneration; var token = _state.Token;
-        try { var detail = await App.Data.DetailAsync(ev, ct: token); if (!token.IsCancellationRequested && generation == _venueGeneration && detail.Context?.VenueImageUrl is string url) { _heroHost.Child = RallyUi.Hero(ev, () => PageState.Watch(ev), () => PageState.Event(ev), url); if (_heroHost.Child is Grid hero) hero.Height = _heroHeight; } } catch (OperationCanceledException) { } catch { /* The current hero remains usable when venue artwork is unavailable. */ }
+        try { var detail = await App.Data.DetailAsync(ev, ct: token); if (!token.IsCancellationRequested && generation == _venueGeneration && detail.Context?.VenueImageUrl is string url) { using var interaction = _state.PreserveInteraction(); _heroHost.Child = RallyUi.Hero(ev, () => PageState.Watch(ev), () => PageState.Event(ev), url); if (_heroHost.Child is Grid hero) hero.Height = _heroHeight; } } catch (OperationCanceledException) { } catch { /* The current hero remains usable when venue artwork is unavailable. */ }
     }
     private void BuildLiveRail()
     {
@@ -168,7 +174,8 @@ public sealed partial class HomePage : Page
         if (_soon.Count == 0) { _upcoming.Children.Clear(); _upcomingButtons.Clear(); _upcoming.Children.Add(RallyUi.Empty("No upcoming games yet", "Open Schedule to browse another day.")); return; }
         foreach (var empty in _upcoming.Children.Where(child => child is not Button).ToList()) _upcoming.Children.Remove(empty);
         while (_upcomingButtons.Count > _soon.Count) { var last = _upcomingButtons[^1]; _upcoming.Children.Remove(last); _upcomingButtons.RemoveAt(_upcomingButtons.Count - 1); }
-        for (int i = 0; i < (_guide ? 1 : 4); i++) _upcoming.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var columns = _guide ? 1 : ActualWidth < 900 ? 2 : 4;
+        for (int i = 0; i < columns; i++) _upcoming.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         for (var i = 0; i < _soon.Count; i++)
         {
             var ev = _soon[i]; var body = _guide ? GuideRow(ev) : CompactEvent(ev);
@@ -179,13 +186,13 @@ public sealed partial class HomePage : Page
             if (button.Tag is not ValueTuple<SportEvent, bool> previous || previous.Item1 != ev || previous.Item2 != _guide) button.Content = body;
             button.Tag = (ev, _guide); button.Background = _guide ? RallyUi.Surface : new SolidColorBrush(Microsoft.UI.Colors.Transparent); button.BorderThickness = new Thickness(_guide ? 1 : 0); button.MinHeight = _guide ? (ActualHeight < 680 ? 32 : 48) : 72;
             if (_guide && ActualHeight < 680 && body is Grid compactRow) { compactRow.Padding = new Thickness(18, 2, 18, 2); foreach (var image in compactRow.Children.OfType<Image>()) image.Height = 24; foreach (var text in compactRow.Children.OfType<TextBlock>()) text.TextWrapping = TextWrapping.NoWrap; }
-            if (_guide) _upcoming.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            if (i % columns == 0) _upcoming.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             if (isNew) button.KeyDown += (_, key) =>
             {
                 if (key.Key == VirtualKey.Down && !_guide) { ShowGuide(true); _upcomingButtons[Math.Min(slot, _upcomingButtons.Count - 1)].Focus(FocusState.Keyboard); key.Handled = true; }
                 else if (key.Key == VirtualKey.Up && _guide && slot == 0) { ShowGuide(false); _upcomingButtons[0].Focus(FocusState.Keyboard); key.Handled = true; }
             };
-            Grid.SetColumn(button, _guide ? 0 : i); Grid.SetRow(button, _guide ? i : 0); if (isNew) { _upcoming.Children.Add(button); _upcomingButtons.Add(button); }
+            Grid.SetColumn(button, i % columns); Grid.SetRow(button, i / columns); if (isNew) { _upcoming.Children.Add(button); _upcomingButtons.Add(button); }
         }
     }
     private static UIElement CompactEvent(SportEvent ev)
@@ -202,15 +209,16 @@ public sealed partial class HomePage : Page
     }
     internal static UIElement GuideRow(SportEvent ev)
     {
-        var grid = new Grid { Padding = new Thickness(18, 8, 18, 8), ColumnSpacing = 18 };
-        foreach (var width in new[] { new GridLength(100), new GridLength(54), new GridLength(54), new GridLength(1, GridUnitType.Star), new GridLength(70), new GridLength(42) }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
-        RallyUi.Put(grid, RallyUi.Text(ev.StartTime.LocalDateTime.ToString("h:mm tt"), 13), 0);
+        var grid = new Grid { Padding = new Thickness(18, 8, 18, 8), ColumnSpacing = 8 };
+        grid.SizeChanged += (_, e) => { var compact = e.NewSize.Width < 620; grid.ColumnDefinitions[1].Width = grid.ColumnDefinitions[2].Width = compact ? new GridLength(0) : new GridLength(36); grid.ColumnDefinitions[4].Width = compact ? new GridLength(0) : new GridLength(70); foreach (var child in grid.Children.OfType<FrameworkElement>()) if (Grid.GetColumn(child) is 1 or 2 or 4) child.Visibility = compact ? Visibility.Collapsed : Visibility.Visible; };
+        foreach (var width in new[] { new GridLength(140), new GridLength(36), new GridLength(36), new GridLength(1, GridUnitType.Star), new GridLength(70), new GridLength(42) }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
+        RallyUi.Put(grid, RallyUi.Text(ev.Status is EventStatus.Live or EventStatus.Halftime or EventStatus.Finished ? RallyUi.Status(ev) + " · " + RallyUi.Score(ev) : ev.StartTime.LocalDateTime.ToString("h:mm tt"), 12), 0);
         RallyUi.Put(grid, RallyUi.Image(ev.AwayTeam?.LogoUrl, 36, 32), 1); RallyUi.Put(grid, RallyUi.Image(ev.HomeTeam?.LogoUrl, 36, 32), 2);
         RallyUi.Put(grid, RallyUi.Text(RallyUi.Matchup(ev), 13), 3); RallyUi.Put(grid, RallyUi.Text(ev.League, 11, true), 4);
         var reminder = RallyUi.Button(""); reminder.MinHeight = 28; reminder.Padding = new Thickness(6, 2, 6, 2);
         var icon = new FontIcon { FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 14, Glyph = App.Data.Settings.IsSavedEvent(ev) ? "\uE73E" : "\uEA8F" }; reminder.Content = icon;
         reminder.Click += (_, _) => { var saved = App.Data.Settings.ToggleSavedEvent(ev); icon.Glyph = saved ? "\uE73E" : "\uEA8F"; };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(reminder, $"Remind me: {RallyUi.Matchup(ev)}"); RallyUi.Put(grid, reminder, 5); return grid;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(reminder, $"Save game: {RallyUi.Matchup(ev)}"); RallyUi.Put(grid, reminder, 5); return grid;
     }
     internal static string[] HomeSports()
     {
@@ -221,12 +229,11 @@ public sealed partial class HomePage : Page
     private void BuildSports()
     {
         _sports.Children.Clear(); var title = RallyUi.Heading("Browse by Sport"); title.Margin = new Thickness(4, 0, 0, ActualHeight < 680 ? 10 : 16); _sports.Children.Add(title);
-        var grid = RallyUi.Columns(10, 12);
         var order = HomeSports().Where(l => !App.Data.Settings.DisabledLeagues.Contains(l)).ToArray();
-        grid.ColumnDefinitions.Clear(); for (int col = 0; col < Math.Max(1, order.Length); col++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        for (var i = 0; i < order.Length; i++) { var league = order[i]; var tile = RallyUi.SportTile(league, () => PageState.Go(typeof(LeagueCenterPage), league));
-            if (ActualHeight < 680 && tile.Content is StackPanel sport) { sport.Margin = new Thickness(4); sport.Spacing = 3; tile.MinHeight = 56; if (sport.Children.FirstOrDefault() is FrameworkElement mark) mark.Height = mark.Width = 30; } RallyUi.Put(grid, tile, i); }
-        _sports.Children.Add(grid);
+        _sports.Children.Add(RallyUi.Flow(order.Select(league => (UIElement)RallyUi.SportTile(league, () => PageState.Go(typeof(LeagueCenterPage), league))).ToArray()));
+        var personalized = _events.Where(g => App.Data.Settings.FavoriteTeamProfiles.Any(t => t.League == g.League && (t.Id == g.HomeTeam?.Id || t.Id == g.AwayTeam?.Id))).ToList();
+        if (personalized.Count > 0) { _sports.Children.Add(RallyUi.Heading("Your Teams")); _sports.Children.Add(PageState.Events(personalized)); }
+
     }
     internal void SetGuideForQa(bool guide) => ShowGuide(guide);
     public void ShowTop() => ShowGuide(false);
@@ -239,7 +246,7 @@ public sealed partial class HomePage : Page
         _scheduleTitle.Text = guide ? "TONIGHT’S SCHEDULE" : "STARTING SOON";
         var previousHeight = _upcoming.ActualHeight; BuildUpcoming();
         _upcoming.Height = previousHeight; RallyUi.Animate(_upcoming, "Height", guide ? _soon.Count * GuideRowHeight : 82, 300);
-        _sports.Visibility = guide ? Visibility.Visible : Visibility.Collapsed; _sports.Margin = new Thickness(0, ActualHeight < 680 ? 4 : 24, 0, 0); ResizeRail();
-        _sports.Opacity = guide ? 0 : 1; RallyUi.Animate(_sports, "Opacity", guide ? 1 : 0, 220);
+        _sports.Visibility = Visibility.Visible; _sports.Margin = new Thickness(0, ActualHeight < 680 ? 4 : 24, 0, 0); ResizeRail();
+        _sports.Opacity = 1;
     }
 }

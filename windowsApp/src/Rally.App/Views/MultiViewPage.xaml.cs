@@ -14,7 +14,7 @@ public sealed partial class MultiViewPage : Page
     private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 10 };
     private readonly ContentControl _stats = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch };
     private readonly Border _statsHost;
-    private bool _showStats, _immersive;
+    private bool _showStats, _immersive, _adding;
     private int _audio;
     private DateTimeOffset _statsAt;
     private bool _statsLoading;
@@ -56,7 +56,7 @@ public sealed partial class MultiViewPage : Page
         _toolbar.Children.Add(RallyUi.Button("Immersive", () => { _immersive = !_immersive; App.Window?.SetFullscreen(_immersive); Layout(); }));
         var follow = new ToggleSwitch { Header = "Focused Audio", IsOn = App.Data.Settings.FollowFocusedAudio }; follow.Toggled += (_, _) => App.Data.Settings.FollowFocusedAudio = follow.IsOn; _toolbar.Children.Add(follow);
         var root = new Grid { RowSpacing = 12 }; root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        RallyUi.Put(root, _toolbar, 0); RallyUi.Put(root, _streams, 0, 1); _state.Root.Children.Add(root);
+        var tools = _toolbar.Children.ToArray(); _toolbar.Children.Clear(); RallyUi.Put(root, RallyUi.Flow(tools), 0); RallyUi.Put(root, _streams, 0, 1); _state.Root.Children.Add(root);
         _timer.Tick += (_, _) => { foreach (var tile in _tiles) tile.Session.Tick(); if (_showStats && !_statsLoading && DateTimeOffset.UtcNow - _statsAt > TimeSpan.FromSeconds(40)) _ = RefreshStats(); if (!_redZoneLoading && App.Data.Settings.RedZoneAlertsEnabled && DateTimeOffset.UtcNow - _redZoneAt > TimeSpan.FromSeconds(40)) _ = RefreshRedZone(); }; Loaded += (_, _) => _timer.Start();
         Unloaded += async (_, _) => { _timer.Stop(); foreach (var tile in _tiles.ToArray()) await tile.Session.DisposeAsync(); _tiles.Clear(); if (_immersive) App.Window?.SetFullscreen(false); };
     }
@@ -77,40 +77,50 @@ public sealed partial class MultiViewPage : Page
     }
     private async Task AddStream()
     {
+        if (_adding) return;
         if (_tiles.Count + (_showStats ? 1 : 0) >= 4) { await RallyUi.Dialog(this, "Multiview", RallyUi.Text("Remove a tile before adding another. Multiview supports four tiles including stats.", 14)); return; }
+        _adding = true;
         try
         {
             var games = (await App.Data.GamesAsync(ct: _state.Token)).Where(g => g.Status is EventStatus.Live or EventStatus.Halftime).ToList();
             List<IptvChannel> channels; try { channels = await App.Data.ChannelsAsync(ct: _state.Token); } catch { channels = []; }
             var choices = games.Select(g => (Name: RallyUi.Matchup(g), Item: (object)g)).Concat(channels.Select(c => (Name: c.Name, Item: (object)c))).ToList();
-            var list = new ListView { ItemsSource = choices.Select(c => c.Name).ToList(), SelectionMode = ListViewSelectionMode.Single, MaxHeight = 380, MinWidth = 420 };
+            var list = new ListView { ItemsSource = choices.Select(c => c.Name).ToList(), SelectionMode = ListViewSelectionMode.Single, MaxHeight = 380, MinWidth = 0 };
             var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = "Add a game or channel", Content = list, PrimaryButtonText = "Choose", CloseButtonText = "Cancel", RequestedTheme = ElementTheme.Dark };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0) return;
+            if (await RallyUi.ShowDialog(dialog) != ContentDialogResult.Primary || list.SelectedIndex < 0) return;
             var choice = choices[list.SelectedIndex].Item;
             if (choice is IptvChannel channel) await Add(StreamResolver.ChannelCandidates([channel])[0], null);
             else if (choice is SportEvent game)
             {
                 var sources = await App.Data.SourcesAsync(game, _state.Token);
                 if (sources.Count == 0) { await RallyUi.Dialog(this, "No sources found", RallyUi.Text("Check your addon or provider settings for this game.", 14)); return; }
-                var sourceList = new ListView { ItemsSource = sources.Select(s => s.Title).ToList(), SelectedIndex = 0, MaxHeight = 340, MinWidth = 420 };
+                var sourceList = new ListView { ItemsSource = sources.Select(s => s.Title).ToList(), SelectedIndex = 0, MaxHeight = 340, MinWidth = 0 };
                 var picker = new ContentDialog { XamlRoot = XamlRoot, Title = "Choose Source", Content = sourceList, PrimaryButtonText = "Add Stream", CloseButtonText = "Cancel", RequestedTheme = ElementTheme.Dark };
-                if (await picker.ShowAsync() == ContentDialogResult.Primary && sourceList.SelectedIndex >= 0) await Add(sources[sourceList.SelectedIndex], game);
+                if (await RallyUi.ShowDialog(picker) == ContentDialogResult.Primary && sourceList.SelectedIndex >= 0) await Add(sources[sourceList.SelectedIndex], game);
             }
         }
         catch (OperationCanceledException) { }
-        catch { await RallyUi.Dialog(this, "Couldn't load sources", RallyUi.Text("Check your connection and try again.", 14)); }
+        catch { if (!_state.Token.IsCancellationRequested) await RallyUi.Dialog(this, "Couldn't load sources", RallyUi.Text("Check your connection and try again.", 14)); }
+        finally { _adding = false; }
     }
     private async Task Add(PlayCandidate source, SportEvent? game)
     {
-        var token = _state.Token; token.ThrowIfCancellationRequested();
+        var token = _state.Token; token.ThrowIfCancellationRequested(); if (_tiles.Count + (_showStats ? 1 : 0) >= 4) return;
         var session = new PlaybackSession(App.Data); var surface = new Grid(); surface.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); surface.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var video = new VideoSurface(session); RallyUi.Put(surface, video, 0);
-        var index = _tiles.Count;
         var footer = RallyUi.Columns(6, 8); footer.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star); for (var col = 1; col < 6; col++) footer.ColumnDefinitions[col].Width = GridLength.Auto;
         var title = RallyUi.Text(game is null ? source.Title : RallyUi.Matchup(game), 12, false, true); title.MaxLines = 1; title.TextWrapping = TextWrapping.NoWrap; RallyUi.Put(footer, title, 0);
-        var actions = new[] { RallyUi.Button("Audio", () => RouteAudio(_tiles.FindIndex(t => t.Session == session))), RallyUi.Button("Pause", () => session.TogglePause()), RallyUi.Button("Source", () => _ = PickSource(session)), RallyUi.Button("Retry", () => _ = session.RetryAsync()), RallyUi.Button("Remove", async () => { var tile = _tiles.FirstOrDefault(t => t.Session == session); if (tile is null) return; _tiles.Remove(tile); await session.DisposeAsync(); _audio = Math.Min(_audio, Math.Max(0, _tiles.Count - 1)); Layout(); RouteAudio(_audio); if (_showStats) await RefreshStats(); }) }; for (var col = 0; col < actions.Length; col++) RallyUi.Put(footer, actions[col], col + 1);
+        var actions = new[] { RallyUi.Button("Audio", () => RouteAudio(_tiles.FindIndex(t => t.Session == session))), RallyUi.Button("Pause", () => session.TogglePause()), RallyUi.Button("Source", () => _ = PickSource(session)), RallyUi.Button("Retry", () => _ = session.RetryAsync()), RallyUi.Button("Remove", async () => { var tile = _tiles.FirstOrDefault(t => t.Session == session); if (tile is null) return; var listening = _tiles.ElementAtOrDefault(_audio)?.Session; _tiles.Remove(tile); await session.DisposeAsync(); _audio = Math.Max(0, _tiles.FindIndex(t => t.Session == listening)); Layout(); RouteAudio(_audio); if (_showStats) await RefreshStats(); }) }; for (var col = 0; col < actions.Length; col++) RallyUi.Put(footer, actions[col], col + 1);
         session.Changed += () => { RouteAudio(_audio); actions[1].Content = session.IsPlaying ? "Pause" : "Play"; };
         foreach (var button in footer.Children.OfType<Button>()) { button.FontSize = 10; button.Padding = new Thickness(8, 6, 8, 6); button.MinHeight = 28; }
+        footer.SizeChanged += (_, e) =>
+        {
+            var compact = e.NewSize.Width < 620;
+            footer.RowDefinitions.Clear(); footer.RowDefinitions.Add(new() { Height = GridLength.Auto }); if (compact) footer.RowDefinitions.Add(new() { Height = GridLength.Auto });
+            Grid.SetColumnSpan(title, compact ? 6 : 1);
+            for (var i = 0; i < actions.Length; i++) { Grid.SetRow(actions[i], compact ? 1 : 0); Grid.SetColumn(actions[i], compact ? i : i + 1); }
+            for (var i = 0; i < footer.ColumnDefinitions.Count; i++) footer.ColumnDefinitions[i].Width = compact ? new GridLength(1, GridUnitType.Star) : i == 0 ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        };
         surface.GotFocus += (_, _) => { if (App.Data.Settings.FollowFocusedAudio) RouteAudio(_tiles.FindIndex(t => t.Session == session)); };
         RallyUi.Put(surface, footer, 0, 1); _tiles.Add(new(session, game, source.Title, surface)); Layout(); RouteAudio(_audio);
         await session.OpenAsync(game is null ? source : new PlaybackRequest(game, source), token); if (token.IsCancellationRequested) return; RouteAudio(_audio); if (_showStats) await RefreshStats();
@@ -123,9 +133,9 @@ public sealed partial class MultiViewPage : Page
             var candidates = session.Event is { } game ? await App.Data.SourcesAsync(game, token, refresh: true) : session.Candidates;
             token.ThrowIfCancellationRequested();
             var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = "Pick Source", CloseButtonText = "Cancel", RequestedTheme = ElementTheme.Dark };
-            dialog.Content = new ScrollViewer { MaxHeight = 420, MinWidth = 360,
+            dialog.Content = new ScrollViewer { MaxHeight = 420, MinWidth = 0,
                 Content = GamePanels.Sources(candidates, candidate => { dialog.Hide(); _ = session.PlayAsync(candidate, token); }) };
-            await dialog.ShowAsync();
+            await RallyUi.ShowDialog(dialog);
         }
         catch (OperationCanceledException) { }
         catch { if (!token.IsCancellationRequested) await RallyUi.Dialog(this, "Couldn't load sources", RallyUi.Text("Try again or retry the current stream.", 13, true)); }

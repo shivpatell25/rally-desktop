@@ -27,10 +27,20 @@ public static class RallyUi
         HorizontalAlignment = HorizontalAlignment.Left, TextWrapping = TextWrapping.Wrap, MaxLines = 3, TextTrimming = TextTrimming.CharacterEllipsis
     };
     public static TextBlock Heading(string value) { var text = Text(value.ToUpperInvariant(), 13, false, true); text.CharacterSpacing = 120; text.Margin = new Thickness(4, 0, 0, 16); return text; }
+    private static readonly Dictionary<string, (ImageSource Source, DateTimeOffset Used)> Images = [];
     public static Image Image(string? url, double width = double.NaN, double height = double.NaN, Stretch stretch = Stretch.Uniform)
     {
         var image = new Image { Width = width, Height = height, Stretch = stretch, IsHitTestVisible = false };
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri)) image.Source = uri.AbsolutePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? new SvgImageSource(uri) : new BitmapImage(uri);
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            if (!Images.TryGetValue(uri.AbsoluteUri, out var cached))
+            {
+                if (Images.Count >= 96) foreach (var key in Images.OrderBy(p => p.Value.Used).Take(24).Select(p => p.Key).ToArray()) Images.Remove(key);
+                ImageSource source = uri.AbsolutePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? new SvgImageSource(uri) : new BitmapImage { DecodePixelWidth = 640, UriSource = uri };
+                cached = (source, DateTimeOffset.UtcNow);
+            }
+            Images[uri.AbsoluteUri] = (cached.Source, DateTimeOffset.UtcNow); image.Source = cached.Source;
+        }
         return image;
     }
     public static Image Asset(string name, double width = double.NaN, double height = double.NaN, Stretch stretch = Stretch.Uniform) => Image($"ms-appx:///Assets/{name}", width, height, stretch);
@@ -73,6 +83,20 @@ public static class RallyUi
         CornerRadius = new CornerRadius(8), Background = Surface, BorderBrush = Edge, BorderThickness = new Thickness(1) };
     public static StackPanel Column(params UIElement[] children) { var panel = new StackPanel { Spacing = 12 }; foreach (var child in children) panel.Children.Add(child); return panel; }
     public static StackPanel Row(params UIElement[] children) { var panel = Column(children); panel.Orientation = Orientation.Horizontal; return panel; }
+    public static Grid Flow(params UIElement[] children)
+    {
+        var grid = new Grid { ColumnSpacing = 10, RowSpacing = 10 };
+        foreach (var child in children) grid.Children.Add(child);
+        void Arrange(double width)
+        {
+            var count = Math.Max(1, Math.Min(children.Length, (int)(Math.Max(180, width) / 180)));
+            if (grid.ColumnDefinitions.Count == count) return;
+            grid.ColumnDefinitions.Clear(); grid.RowDefinitions.Clear();
+            for (var i = 0; i < count; i++) grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+            for (var i = 0; i < children.Length; i++) { if (i % count == 0) grid.RowDefinitions.Add(new() { Height = GridLength.Auto }); Grid.SetColumn((FrameworkElement)children[i], i % count); Grid.SetRow((FrameworkElement)children[i], i / count); }
+        }
+        Arrange(900); grid.SizeChanged += (_, e) => Arrange(e.NewSize.Width); return grid;
+    }
     public static ScrollViewer Scroll(UIElement child) => new() { Content = child, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0, 0, 0, 24) };
     public static Grid Columns(int count, double spacing = 16) { var grid = new Grid { ColumnSpacing = spacing }; for (int i = 0; i < count; i++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); return grid; }
@@ -100,7 +124,7 @@ public static class RallyUi
         art.Background = new LinearGradientBrush { StartPoint = new Point(0, .5), EndPoint = new Point(1, .5), GradientStops = {
             new GradientStop { Color = TeamColor(ev.AwayTeam), Offset = 0 }, new GradientStop { Color = Color.FromArgb(255, 17, 23, 29), Offset = .5 }, new GradientStop { Color = TeamColor(ev.HomeTeam), Offset = 1 } } };
         Put(art, TeamLogo(ev.AwayTeam, 60), 0);
-        var score = Text(showScore && ev.Status is EventStatus.Live or EventStatus.Halftime or EventStatus.Finished ? $"{ev.ScoreAway ?? 0}  —  {ev.ScoreHome ?? 0}" : "VS", 23, false, true);
+        var score = Text(showScore && ev.Status is EventStatus.Live or EventStatus.Halftime or EventStatus.Finished ? $"{ev.ScoreAway?.ToString() ?? "—"}  —  {ev.ScoreHome?.ToString() ?? "—"}" : "VS", 23, false, true);
         score.TextWrapping = TextWrapping.NoWrap; score.HorizontalAlignment = HorizontalAlignment.Center; score.VerticalAlignment = VerticalAlignment.Center; Put(art, score, 1);
         Put(art, TeamLogo(ev.HomeTeam, 60), 2);
         var status = Text(Status(ev), 11, false, true); status.VerticalAlignment = VerticalAlignment.Bottom;
@@ -158,9 +182,17 @@ public static class RallyUi
         var panel = Column(Text(title, 19, false, true), Text(detail, 14, true)); panel.Margin = new Thickness(4, 14, 4, 20);
         if (action is not null) panel.Children.Add(Button(action, click)); return panel;
     }
+    private static readonly SemaphoreSlim DialogGate = new(1, 1);
+    public static async Task<ContentDialogResult> ShowDialog(ContentDialog dialog)
+    {
+        if (!await DialogGate.WaitAsync(0)) return ContentDialogResult.None;
+        try { return dialog.XamlRoot is not null ? await dialog.ShowAsync() : ContentDialogResult.None; }
+        catch (OperationCanceledException) { return ContentDialogResult.None; }
+        finally { DialogGate.Release(); }
+    }
     public static async Task Dialog(FrameworkElement owner, string title, UIElement content)
     {
         var dialog = new ContentDialog { XamlRoot = owner.XamlRoot, Title = title, Content = content, CloseButtonText = "Done", DefaultButton = ContentDialogButton.Close, RequestedTheme = ElementTheme.Dark };
-        await dialog.ShowAsync();
+        await ShowDialog(dialog);
     }
 }

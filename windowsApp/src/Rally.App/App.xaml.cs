@@ -12,6 +12,14 @@ public partial class App : Application
     private static RallyRepository CreateRepository()
     {
 #if DEBUG
+        if (Environment.GetCommandLineArgs().Contains("--qa-real"))
+        {
+            var settings = new SettingsStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rally-QA-Real"));
+            if (!settings.SetupComplete) settings.StremioAddonUrls = [];
+            settings.SetupComplete = true;
+            settings.ScoreSaverEnabled = false;
+            return new(settings);
+        }
         if (Environment.GetCommandLineArgs().Contains("--visual-fixture"))
         {
             var settings = new SettingsStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rally-QA"));
@@ -30,10 +38,11 @@ public partial class App : Application
 
     public App()
     {
+        StartupTrace("App constructor");
         UnhandledException += (_, e) => LogCrash(e.Exception);
         try
         {
-            InitializeComponent();
+            InitializeComponent(); StartupTrace("App resources loaded");
         }
         catch (Exception ex)
         {
@@ -42,6 +51,11 @@ public partial class App : Application
         }
     }
 
+    [System.Diagnostics.Conditional("DEBUG")]
+    internal static void StartupTrace(string stage)
+    {
+        try { var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rally"); Directory.CreateDirectory(dir); var path = Path.Combine(dir, "startup.log"); if (File.Exists(path) && new FileInfo(path).Length > 65536) File.Delete(path); File.AppendAllText(path, $"{DateTimeOffset.UtcNow:O} {stage}\n"); } catch { }
+    }
     private static void LogCrash(Exception exception)
     {
         try
@@ -56,8 +70,8 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        Window = new MainWindow();
-        TryRegisterProtocol();
+        StartupTrace("Creating main window"); Window = new MainWindow(); StartupTrace("Main window created");
+        if (!IsQaLaunch) TryRegisterProtocol();
         // First-run gate (mirrors Android startDest gating): fresh installs land on
         // onboarding until sources are saved. Specified as
         // !SetupComplete && !HasCredentials; in practice StremioAddonUrls falls back
@@ -70,12 +84,24 @@ public partial class App : Application
         }
         if (_settings.SetupComplete) Window.NavigateTo("home");
         HandleProtocolLaunch(Window);
-        Window.Activate();
+        StartupTrace("Activating window"); Window.Activate(); StartupTrace("Window activated");
         _alerts.Tick += async (_, _) => { if (_alertBusy || !_settings.LiveGameAlertsEnabled) return; _alertBusy = true; try { await Notifications.CheckAndNotifyAsync(await Data.GamesAsync()); } catch { } finally { _alertBusy = false; } }; _alerts.Start();
         Window.Closed += (_, _) => _alerts.Stop();
 #if DEBUG
-        if (Environment.GetCommandLineArgs().Contains("--visual-fixture")) Testing.QaHarness.Start(Window);
+        if (IsQaLaunch) Testing.QaHarness.Start(Window);
 #endif
+    }
+
+    private static bool IsQaLaunch
+    {
+        get
+        {
+#if DEBUG
+            return Environment.GetCommandLineArgs().Any(arg => arg is "--visual-fixture" or "--qa-real");
+#else
+            return false;
+#endif
+        }
     }
 
     // rally:// protocol: rally://event/{id} -> EventDetailPage (event resolved by
@@ -98,19 +124,24 @@ public partial class App : Application
         try
         {
             var path = link["rally://".Length..].Trim('/').Split('/', 2);
-            if (path.Length == 1 && path[0] is "home" or "live") { window.DispatcherQueue.TryEnqueue(() => window.NavigateTo(path[0])); return; }
+            if (path.Length == 1 && path[0] is "home" or "live" or "schedule" or "leagues" or "myteams" or "search" or "settings") { window.DispatcherQueue.TryEnqueue(() => window.NavigateTo(path[0])); return; }
             if (path.Length != 2) return;
             if (path[0].Equals("event", StringComparison.OrdinalIgnoreCase))
             {
                 var id = Uri.UnescapeDataString(path[1]);
-                var espn = new EspnClient(new HttpClient());
-                var ev = (await espn.FetchAllAsync().ConfigureAwait(false))
+                var ev = (await Data.GamesAsync().ConfigureAwait(false))
                     .FirstOrDefault(e => e.Id == id);
                 if (ev is null) return;
                 window.DispatcherQueue.TryEnqueue(() =>
                 {
                     window.Navigate(typeof(EventDetailPage), ev);
                 });
+            }
+            else if (path[0].Equals("team", StringComparison.OrdinalIgnoreCase))
+            {
+                var key = Uri.UnescapeDataString(path[1]).Split(':', 2); if (key.Length != 2) return;
+                var team = (await Data.TeamsAsync(key[0])).FirstOrDefault(t => t.Id == key[1]); if (team is null) return;
+                window.DispatcherQueue.TryEnqueue(() => window.Navigate(typeof(TeamHubPage), new FavoriteTeam(team.Id, key[0], team.Name, team.Abbreviation, team.LogoUrl)));
             }
             else if (path[0].Equals("player", StringComparison.OrdinalIgnoreCase))
             {

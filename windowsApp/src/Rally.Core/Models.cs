@@ -23,6 +23,9 @@ public sealed record GameDetail(List<PlayerLeader> Leaders, List<HighlightClip> 
 {
     public List<GamePlay> Plays { get; init; } = [];
     public GameContext? Context { get; init; }
+    public List<GameLineup> Lineups { get; init; } = [];
+    public List<TeamFormEntry> TeamForm { get; init; } = [];
+    public Dictionary<string, List<InjuryEntry>> Injuries { get; init; } = [];
     public List<GamePlay> KeyMoments => Plays.Where(p => p.Scoring).OrderByDescending(p => p.Sequence).Take(20).ToList();
     public static GameDetail Empty => new([], [], [], [], []);
 }
@@ -108,3 +111,9 @@ public static class Quality
         return new StreamQualityInfo(res, fps, res == "4K", fps == "60 fps", hdr);
     }
 }
+
+public sealed record SportsSchedule(List<SportEvent> Games, IReadOnlyList<string> UnavailableLeagues);
+public sealed record LineupPlayer(RosterPlayer Player, bool? Starter);
+public sealed record GameLineup(string TeamId, string TeamName, string? LogoUrl, List<LineupPlayer> Players);
+
+public sealed record TeamFormEntry(string TeamId, string EventId, string Opponent, string? OpponentLogo, string Result, string Score, DateTimeOffset? Date);

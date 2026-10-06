@@ -6,8 +6,8 @@ namespace Rally.Core;
 
 public sealed class StremioClient(HttpClient http)
 {
-    private readonly ConcurrentDictionary<string, (JsonElement Root, DateTimeOffset At)> _manifests = new();
-    private readonly ConcurrentDictionary<string, (List<StremioStreamOption> Streams, DateTimeOffset At)> _streams = new();
+    private readonly AsyncDataCache<JsonElement> _manifests = new(TimeSpan.FromMinutes(30), 32);
+    private readonly AsyncDataCache<List<StremioStreamOption>> _streams = new(TimeSpan.FromSeconds(90), 128);
 
     public async Task<JsonDocument> FetchManifestAsync(string manifestUrl, CancellationToken ct = default)
     {
@@ -16,12 +16,8 @@ public sealed class StremioClient(HttpClient http)
         return JsonDocument.Parse(root.GetRawText());
     }
 
-    private async Task<JsonElement> ManifestAsync(string url, CancellationToken ct)
-    {
-        if (_manifests.TryGetValue(url, out var cached) && DateTimeOffset.UtcNow - cached.At < TimeSpan.FromMinutes(30)) return cached.Root;
-        var root = await JsonAsync(url, ct);
-        _manifests[url] = (root, DateTimeOffset.UtcNow); return root;
-    }
+    private Task<JsonElement> ManifestAsync(string url, CancellationToken ct) =>
+        _manifests.GetAsync(url, () => JsonAsync(url, CancellationToken.None), false, ct);
 
     private async Task<JsonElement> JsonAsync(string url, CancellationToken ct)
     {
@@ -37,20 +33,19 @@ public sealed class StremioClient(HttpClient http)
 
     public Task<List<StremioStreamOption>> FindStreamsAsync(SportEvent ev, string addonBase, CancellationToken ct = default) =>
         DiscoverAsync(addonBase, ev, ev.Name, ct);
-    public Task<List<StremioStreamOption>> RefreshStreamsAsync(SportEvent ev, string addonBase, CancellationToken ct = default)
-    {
-        var normalized = UrlNormalizer.NormalizeAddon(addonBase) ?? throw new ArgumentException("Invalid addon URL.");
-        _streams.TryRemove(normalized + "|" + ev.League + ":" + ev.Id, out _);
-        return DiscoverAsync(addonBase, ev, ev.Name, ct);
-    }
+    public Task<List<StremioStreamOption>> RefreshStreamsAsync(SportEvent ev, string addonBase, CancellationToken ct = default) =>
+        DiscoverAsync(addonBase, ev, ev.Name, ct, refresh: true);
     public Task<List<StremioStreamOption>> SearchAsync(string query, string addonBase, CancellationToken ct = default) =>
         DiscoverAsync(addonBase, null, query.Trim(), ct);
 
-    private async Task<List<StremioStreamOption>> DiscoverAsync(string addonBase, SportEvent? ev, string query, CancellationToken ct)
+    private Task<List<StremioStreamOption>> DiscoverAsync(string addonBase, SportEvent? ev, string query, CancellationToken ct, bool refresh = false)
     {
         var normalized = UrlNormalizer.NormalizeAddon(addonBase) ?? throw new ArgumentException("Invalid addon URL.");
         var key = normalized + "|" + (ev is null ? query : ev.League + ":" + ev.Id);
-        if (_streams.TryGetValue(key, out var cached) && DateTimeOffset.UtcNow - cached.At < TimeSpan.FromSeconds(90)) return cached.Streams;
+        return _streams.GetAsync(key, () => DiscoverCoreAsync(normalized, ev, query, CancellationToken.None), refresh, ct);
+    }
+    private async Task<List<StremioStreamOption>> DiscoverCoreAsync(string normalized, SportEvent? ev, string query, CancellationToken ct)
+    {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(20));
         var manifest = await ManifestAsync(normalized, budget.Token);
         var root = new Uri(normalized);
@@ -60,6 +55,12 @@ public sealed class StremioClient(HttpClient http)
         if (selected.Count == 0) selected = catalogs;
         using var concurrency = new SemaphoreSlim(4);
         var found = new ConcurrentBag<StremioStreamOption>();
+        var succeeded = 0; var failed = 0;
+        async Task<JsonElement> CatalogJsonAsync(string url, CancellationToken token)
+        {
+            try { var json = await JsonAsync(url, token); Interlocked.Increment(ref succeeded); return json; }
+            catch { Interlocked.Increment(ref failed); throw; }
+        }
         await Task.WhenAll(selected.Take(16).Select(async catalog => {
             var entered = false;
             try
@@ -87,7 +88,7 @@ public sealed class StremioClient(HttpClient http)
                 var searchRequired = extras.Any(e => e.GetPropertyOrNull("name")?.GetString() == "search" && e.GetPropertyOrNull("isRequired")?.GetBoolean() == true);
                 if (!searchRequired)
                 {
-                    try { var data = await JsonAsync(ResourceUrl(root, "catalog", type, id, required), budget.Token); metas.AddRange(data.GetPropertyOrNull("metas")?.EnumerateArray().Where(Matches) ?? []); }
+                    try { var data = await CatalogJsonAsync(ResourceUrl(root, "catalog", type, id, required), budget.Token); metas.AddRange(data.GetPropertyOrNull("metas")?.EnumerateArray().Where(Matches) ?? []); }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
                     catch (HttpRequestException) { }
                 }
@@ -99,7 +100,7 @@ public sealed class StremioClient(HttpClient http)
                     {
                         if (budget.IsCancellationRequested) break;
                         var values = new Dictionary<string, string>(required) { ["search"] = search };
-                        try { var data = await JsonAsync(ResourceUrl(root, "catalog", type, id, values), budget.Token); metas.AddRange(data.GetPropertyOrNull("metas")?.EnumerateArray().Where(Matches) ?? []); }
+                        try { var data = await CatalogJsonAsync(ResourceUrl(root, "catalog", type, id, values), budget.Token); metas.AddRange(data.GetPropertyOrNull("metas")?.EnumerateArray().Where(Matches) ?? []); }
                         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
                         catch (HttpRequestException) { }
                         if (metas.Count > 0) break;
@@ -109,7 +110,7 @@ public sealed class StremioClient(HttpClient http)
                 {
                     if (budget.IsCancellationRequested) break;
                     var metaId = meta.GetPropertyOrNull("id")?.GetString(); if (metaId is null) continue;
-                    try { var data = await JsonAsync(ResourceUrl(root, "stream", meta.GetPropertyOrNull("type")?.GetString() ?? type, metaId), budget.Token);
+                    try { var data = await CatalogJsonAsync(ResourceUrl(root, "stream", meta.GetPropertyOrNull("type")?.GetString() ?? type, metaId), budget.Token);
                         foreach (var stream in data.GetPropertyOrNull("streams")?.EnumerateArray() ?? []) if (ToOption(stream, name) is { } option) found.Add(option);
                     }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
@@ -121,8 +122,9 @@ public sealed class StremioClient(HttpClient http)
             finally { if (entered) concurrency.Release(); }
         }));
         ct.ThrowIfCancellationRequested();
+        if (failed > 0 && succeeded == 0) throw new HttpRequestException("The addon catalogs are unavailable.");
         var result = found.DistinctBy(s => s.StreamUrl, StringComparer.Ordinal).ToList();
-        _streams[key] = (result, DateTimeOffset.UtcNow); return result;
+        return result;
     }
 
     public void Invalidate() { _streams.Clear(); _manifests.Clear(); }

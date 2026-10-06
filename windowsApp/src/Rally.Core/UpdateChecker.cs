@@ -6,6 +6,9 @@ namespace Rally.Core;
 
 public sealed record RallyRelease(string Tag, string PageUrl, string? AssetUrl, long? AssetSize, string? Notes);
 
+public enum UpdateCheckState { Current, Available, Failed }
+public sealed record UpdateCheckResult(UpdateCheckState State, RallyRelease? Release = null);
+
 public static class RallyInfo
 {
     // Same train as macOS (packaging/package.sh version argument).
@@ -17,7 +20,9 @@ public sealed class UpdateChecker(HttpClient? http = null)
     public const string ReleasesUrl = "https://api.github.com/repos/shivpatell25/rally-desktop/releases/latest";
     private readonly HttpClient _http = http ?? new HttpClient() { Timeout = TimeSpan.FromSeconds(15) };
 
-    public async Task<RallyRelease?> CheckAsync(CancellationToken ct = default)
+    public async Task<RallyRelease?> CheckAsync(CancellationToken ct = default) => (await CheckStatusAsync(ct)).Release;
+
+    public async Task<UpdateCheckResult> CheckStatusAsync(CancellationToken ct = default)
     {
         try
         {
@@ -25,15 +30,16 @@ public sealed class UpdateChecker(HttpClient? http = null)
             req.Headers.UserAgent.ParseAdd("Rally/Windows");
             req.Headers.Accept.ParseAdd("application/vnd.github+json");
             using var res = await _http.SendAsync(req, ct).ConfigureAwait(false);
-            if (!res.IsSuccessStatusCode) return null;
+            res.EnsureSuccessStatusCode();
             using var doc = System.Text.Json.JsonDocument.Parse(
                 await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
             var root = doc.RootElement;
-            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) throw new System.Text.Json.JsonException();
             if (root.TryGetProperty("draft", out var draft) && draft.ValueKind == System.Text.Json.JsonValueKind.True)
-                return null;
+                return new(UpdateCheckState.Current);
             var tag = root.TryGetProperty("tag_name", out var t) ? t.GetString() ?? "" : "";
-            if (tag.Length == 0 || CompareVersions(tag, RallyInfo.CurrentVersion) <= 0) return null;
+            if (tag.Length == 0) throw new System.Text.Json.JsonException();
+            if (CompareVersions(tag, RallyInfo.CurrentVersion) <= 0) return new(UpdateCheckState.Current);
             var page = root.TryGetProperty("html_url", out var h) ? h.GetString() : null;
             string? assetUrl = null;
             long? assetSize = null;
@@ -51,9 +57,10 @@ public sealed class UpdateChecker(HttpClient? http = null)
                 }
             }
             var notes = root.TryGetProperty("body", out var b) ? b.GetString() : null;
-            return new RallyRelease(tag, page ?? ReleasesUrl, assetUrl, assetSize, notes);
+            return new(UpdateCheckState.Available, new RallyRelease(tag, page ?? "https://github.com/shivpatell25/rally-desktop/releases", assetUrl, assetSize, notes));
         }
-        catch { return null; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return new(UpdateCheckState.Failed); }
     }
 
     // 1:1 with compareVersions in RallyUpdateManager.kt: stable > rc > beta,

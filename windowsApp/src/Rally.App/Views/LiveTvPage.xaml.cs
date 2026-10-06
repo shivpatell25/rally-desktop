@@ -12,27 +12,31 @@ public sealed partial class LiveTvPage : Page
     private readonly ContentControl _channelRows = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly TextBlock _channelCount = RallyUi.Text("", 12, true);
     private readonly Grid _channelBody = new() { RowSpacing = 12 };
-    private readonly TextBox _search = new() { PlaceholderText = "Search channels", Width = 290 };
-    private readonly ComboBox _category = new() { Width = 200 };
+    private readonly TextBox _search = new() { PlaceholderText = "Search channels", HorizontalAlignment = HorizontalAlignment.Stretch };
+    private readonly ComboBox _category = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
     private List<IptvChannel> _channels = [];
     private bool _channelMode;
     private int _loadGeneration;
+    private bool _refreshing;
+    private readonly DispatcherTimer _refresh = new() { Interval = TimeSpan.FromSeconds(40) };
     public LiveTvPage()
     {
         InitializeComponent(); NavigationCacheMode = NavigationCacheMode.Required; _state = new(this);
         _channelBody.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _channelBody.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _channelBody.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        RallyUi.Put(_channelBody, RallyUi.Row(_search, _category, RallyUi.Button("Refresh", () => _ = Channels(true))), 0);
+        RallyUi.Put(_channelBody, RallyUi.Flow(_search, _category, RallyUi.Button("Refresh", () => _ = Channels(true))), 0);
         RallyUi.Put(_channelBody, _channelCount, 0, 1); RallyUi.Put(_channelBody, _channelRows, 0, 2);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_search, "Search channels");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_category, "Channel category");
         _search.TextChanged += (_, _) => Filter(); _category.SelectionChanged += (_, _) => Filter();
         BuildRoot();
+        _refresh.Tick += async (_, _) => { if (_refreshing) return; _refreshing = true; try { if (_channelMode && _channelRows.Content is ListView list) await Guides(((IEnumerable<IptvChannel>)list.ItemsSource).Take(16).ToList(), list); else if (!_channelMode) await Games(); } finally { _refreshing = false; } };
+        Loaded += (_, _) => _refresh.Start(); Unloaded += (_, _) => _refresh.Stop();
     }
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
-        _state.Activate();
+        _state.Activate(); _channelMode = _state.Recall("channelMode", _channelMode);
         if (_channelMode) await Channels(); else await Games();
     }
     private void BuildRoot()
@@ -48,14 +52,15 @@ public sealed partial class LiveTvPage : Page
     }
     private async Task Games()
     {
-        _channelMode = false; var generation = ++_loadGeneration;
-        try { var games = (await App.Data.GamesAsync(ct: _state.Token)).Where(ev => ev.Status is EventStatus.Live or EventStatus.Halftime).ToList(); if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return; _content.Content = games.Count > 0 ? RallyUi.Scroll(PageState.Events(games)) : RallyUi.Empty("No games are live right now", "Browse your live channels or recent highlights.", "Browse Live TV", () => _ = Channels()); }
+        _channelMode = false; _state.Remember("channelMode", false); var generation = ++_loadGeneration;
+        if (_content.Content is null) _content.Content = RallyUi.Text("Loading live games…", 13, true);
+        try { var games = (await App.Data.GamesAsync(ct: _state.Token)).Where(ev => ev.Status is EventStatus.Live or EventStatus.Halftime).ToList(); if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return; using var interaction = _state.PreserveInteraction(); _content.Content = games.Count > 0 ? RallyUi.Scroll(PageState.Events(games)) : RallyUi.Empty("No games are live right now", "Browse your live channels or recent highlights.", "Browse Live TV", () => _ = Channels()); }
         catch (OperationCanceledException) { }
         catch { if (generation != _loadGeneration || _state.Token.IsCancellationRequested) return; _content.Content = RallyUi.Empty("Scores couldn't load", "Check your connection.", "Retry", () => _ = Games()); }
     }
     private async Task Channels(bool refresh = false)
     {
-        _channelMode = true; var generation = ++_loadGeneration;
+        _channelMode = true; _state.Remember("channelMode", true); var generation = ++_loadGeneration;
         var selectedCategory = _category.SelectedItem as string;
         _content.Content = RallyUi.Text("Loading channels…", 13, true);
         try
@@ -80,7 +85,7 @@ public sealed partial class LiveTvPage : Page
 """);
         list.ContainerContentChanging += (_, args) => { if (args.Item is IptvChannel channel) Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(args.ItemContainer, channel.Name); };
         list.ItemClick += (_, e) => { if (e.ClickedItem is IptvChannel channel) PageState.Go(typeof(PlayerPage), channel); };
-        _channelCount.Text = $"{rows.Count} channels · {_channels.Count} total"; _channelRows.Content = list;
+        _channelCount.Text = $"{rows.Count} channels · {_channels.Count} total"; _channelRows.Content = rows.Count == 0 ? RallyUi.Empty("No matching channels", "Try another name or category.") : list;
         _ = Guides(rows.Take(16).ToList(), list);
     }
     private async Task Guides(List<IptvChannel> channels, ListView list)

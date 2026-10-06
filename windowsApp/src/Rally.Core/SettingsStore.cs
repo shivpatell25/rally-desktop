@@ -21,6 +21,10 @@ public sealed class SettingsStore
         public readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Secrets = new();
         public readonly object Gate = new();
         public bool Loaded;
+        public bool PreferencesWriteFailed, SecretsWriteFailed;
+        public string? PersistenceError;
+        public event Action<string>? Changed;
+        public void Notify(string key) => Changed?.Invoke(key);
     }
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SharedState> States = new(StringComparer.OrdinalIgnoreCase);
     private readonly SharedState _state;
@@ -39,6 +43,10 @@ public sealed class SettingsStore
             if (!_state.Loaded) { Load(); _state.Loaded = true; }
         }
     }
+
+    public event Action<string> Changed { add => _state.Changed += value; remove => _state.Changed -= value; }
+
+    public string? PersistenceError => _state.PersistenceError;
 
     public string CacheDirectory => Path.Combine(_dir, "cache");
 
@@ -147,6 +155,7 @@ public sealed class SettingsStore
     {
         var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json) ?? throw new InvalidDataException("Invalid preferences backup.");
         lock (_state.Gate) { foreach (var pair in values.Where(p => PortableKeys.Contains(p.Key))) _prefs[pair.Key] = pair.Value.Clone(); Save(); }
+        _state.Notify("preferences_imported");
     }
     private static void AtomicWrite(string path, byte[] data)
     {
@@ -232,12 +241,13 @@ public sealed class SettingsStore
 
     public bool ToggleFavoriteTeam(FavoriteTeam team)
     {
-        var current = FavoriteTeamProfiles;
-        var existing = current.FindIndex(t => t.Key == team.Key);
-        if (existing >= 0) { current.RemoveAt(existing); FavoriteTeamProfiles = current; return false; }
-        current.Add(team);
-        FavoriteTeamProfiles = current;
-        return true;
+        lock (_state.Gate)
+        {
+            var current = FavoriteTeamProfiles;
+            var existing = current.FindIndex(t => t.Key == team.Key);
+            if (existing >= 0) current.RemoveAt(existing); else current.Add(team);
+            FavoriteTeamProfiles = current; return existing < 0;
+        }
     }
 
     public bool IsFavoriteTeam(string id, string league) =>
@@ -297,6 +307,7 @@ public sealed class SettingsStore
     private void Set(string key, object? value)
     {
         lock (_state.Gate) { _prefs[key] = JsonSerializer.SerializeToElement(value); Save(); }
+        _state.Notify(key);
     }
 
     private string Secret(string key) => _secrets.TryGetValue(key, out var v) ? v : "";
@@ -304,6 +315,7 @@ public sealed class SettingsStore
     private void SetSecret(string key, string value)
     {
         lock (_state.Gate) { _secrets[key] = value; SaveSecrets(); }
+        _state.Notify(key);
     }
 
     private void Load()
@@ -330,7 +342,8 @@ public sealed class SettingsStore
 
     private void Save()
     {
-        try { AtomicWrite(_prefsPath, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(_prefs))); } catch { }
+        try { AtomicWrite(_prefsPath, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(_prefs))); _state.PreferencesWriteFailed = false; ClearPersistenceError(); }
+        catch { _state.PreferencesWriteFailed = true; ReportPersistenceError(); }
     }
 
     private void SaveSecrets()
@@ -339,8 +352,17 @@ public sealed class SettingsStore
         {
             var raw = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(_secrets));
             var out_ = OperatingSystem.IsWindows() ? ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser) : raw;
-            AtomicWrite(_secretsPath, out_);
+            AtomicWrite(_secretsPath, out_); _state.SecretsWriteFailed = false; ClearPersistenceError();
         }
-        catch { }
+        catch { _state.SecretsWriteFailed = true; ReportPersistenceError(); }
+    }
+    private void ClearPersistenceError()
+    {
+        if (!_state.PreferencesWriteFailed && !_state.SecretsWriteFailed) _state.PersistenceError = null;
+    }
+    private void ReportPersistenceError()
+    {
+        _state.PersistenceError = "Rally could not save your changes to this Windows profile. They remain available for this session. Check that your profile has free space and is writable, then save again.";
+        _state.Notify("persistence_error");
     }
 }

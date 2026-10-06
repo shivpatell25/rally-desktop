@@ -13,7 +13,7 @@ public static class GamePanels
         foreach (var (team, column) in new[] { (ev.AwayTeam, 0), (ev.HomeTeam, 1) })
         {
             var group = RallyUi.Column(RallyUi.Row(RallyUi.Image(team?.LogoUrl, 26, 26), RallyUi.Text(team?.Name ?? "Team", 12, false, true))); group.Spacing = compact ? 5 : 9;
-            foreach (var leader in detail.Leaders.Where(l => l.TeamAbbr == team?.Abbreviation).Take(compact ? 3 : 5))
+            foreach (var leader in detail.Leaders.Where(l => l.TeamAbbr == team?.Abbreviation))
             {
                 var photo = RallyUi.Image(leader.HeadshotUrl, compact ? 24 : 36, compact ? 24 : 36);
                 var text = RallyUi.Column(RallyUi.Text(leader.PlayerShortName, 11, false, true), RallyUi.Text($"{leader.Category}: {leader.StatDisplay}", 10, true)); text.Spacing = 3;
@@ -24,7 +24,7 @@ public static class GamePanels
         }
         body.Children.Add(RallyUi.Column(RallyUi.Text("Team Leaders", 14, false, true), leaders));
         var teamStats = RallyUi.Column(RallyUi.Text("Team Stats", 14, false, true)); teamStats.Spacing = compact ? 5 : 8;
-        foreach (var stat in detail.TeamStats.Take(compact ? 5 : 16))
+        foreach (var stat in detail.TeamStats)
         {
             var row = RallyUi.Columns(3, 8);
             var away = RallyUi.Text(stat.AwayValue, 12, false, true); var label = RallyUi.Text(stat.Label, 11, true); label.TextAlignment = TextAlignment.Center; label.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -67,6 +67,18 @@ public static class GamePanels
             }
         }
         if (body.Children.Count == 0) body.Children.Add(RallyUi.Empty("Players are not reported yet", "The game’s player statistics will appear here when available."));
+        return body;
+    }
+    public static UIElement Lineups(GameDetail detail)
+    {
+        var body = new StackPanel { Spacing = 18 };
+        foreach (var team in detail.Lineups)
+        {
+            body.Children.Add(RallyUi.Row(RallyUi.Image(team.LogoUrl, 30, 30), RallyUi.Text(team.TeamName, 17, false, true)));
+            foreach (var row in team.Players)
+                body.Children.Add(RallyUi.Row(RallyUi.Image(row.Player.HeadshotUrl, 40, 40), RallyUi.Column(RallyUi.Text(row.Player.Name, 14, false, true), RallyUi.Text($"{row.Player.Position} · #{row.Player.Jersey}" + (row.Starter is true ? " · Starter" : row.Starter is false ? " · Bench" : ""), 12, true))));
+        }
+        if (detail.Lineups.Count == 0) body.Children.Add(RallyUi.Empty("Lineups haven't been published", "Reported lineups appear here when this competition provides them. Team rosters are available from Leagues."));
         return body;
     }
     public static UIElement Sources(IEnumerable<PlayCandidate> sources, Action<PlayCandidate> play)

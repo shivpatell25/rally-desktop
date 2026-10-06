@@ -21,7 +21,7 @@ public sealed class EspnDetail(HttpClient http)
             doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch { return GameDetail.Empty; }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { return GameDetail.Empty; }
         using (doc) return ParseSummary(doc.RootElement, awayAbbr, homeAbbr);
     }
 
@@ -142,9 +142,39 @@ public sealed class EspnDetail(HttpClient http)
             var media = b.GetPropertyOrNull("media")?.GetPropertyOrNull("shortName")?.GetString();
             if (!string.IsNullOrEmpty(media)) broadcasts.Add(media);
         }
-        return new GameDetail(leaders, clips, tables, comparisons, broadcasts.Distinct().ToList()) { Plays = GameData.ParsePlays(root), Context = GameData.ParseContext(root) };
+        return new GameDetail(leaders, clips, tables, comparisons, broadcasts.Distinct().ToList()) { Plays = GameData.ParsePlays(root), Context = GameData.ParseContext(root), Lineups = ParseLineups(root), TeamForm = ParseTeamForm(root), Injuries = ParseSummaryInjuries(root) };
     }
 
+    internal static List<TeamFormEntry> ParseTeamForm(JsonElement root)
+    {
+        var entries = new List<TeamFormEntry>();
+        foreach (var group in root.GetPropertyOrNull("lastFiveGames")?.EnumerateArray() ?? [])
+        {
+            var teamId = group.GetPropertyOrNull("team")?.GetPropertyOrNull("id")?.StringValue(); if (teamId is null) continue;
+            foreach (var game in group.GetPropertyOrNull("events")?.EnumerateArray() ?? [])
+            {
+                var opponent = game.GetPropertyOrNull("opponent"); DateTimeOffset? date = DateTimeOffset.TryParse(game.GetPropertyOrNull("gameDate")?.StringValue(), out var parsed) ? parsed : null;
+                entries.Add(new(teamId, game.GetPropertyOrNull("id")?.StringValue() ?? "", opponent?.GetPropertyOrNull("displayName")?.StringValue() ?? "", game.GetPropertyOrNull("opponentLogo")?.StringValue(), game.GetPropertyOrNull("gameResult")?.StringValue() ?? "", game.GetPropertyOrNull("score")?.StringValue() ?? "", date));
+            }
+        }
+        return entries;
+    }
+    internal static Dictionary<string, List<InjuryEntry>> ParseSummaryInjuries(JsonElement root)
+    {
+        var result = new Dictionary<string, List<InjuryEntry>>();
+        foreach (var group in root.GetPropertyOrNull("injuries")?.EnumerateArray() ?? [])
+        {
+            var teamId = group.GetPropertyOrNull("team")?.GetPropertyOrNull("id")?.StringValue(); if (teamId is null) continue;
+            var entries = new List<InjuryEntry>();
+            foreach (var entry in group.GetPropertyOrNull("injuries")?.EnumerateArray() ?? [])
+            {
+                var athlete = entry.GetPropertyOrNull("athlete"); var detail = entry.GetPropertyOrNull("details");
+                entries.Add(new(athlete?.GetPropertyOrNull("displayName")?.StringValue() ?? "", athlete?.GetPropertyOrNull("position")?.GetPropertyOrNull("abbreviation")?.StringValue(), entry.GetPropertyOrNull("status")?.StringValue(), entry.GetPropertyOrNull("shortComment")?.StringValue() ?? detail?.StringValue() ?? string.Join(" · ", new[] { detail?.GetPropertyOrNull("type")?.StringValue(), detail?.GetPropertyOrNull("detail")?.StringValue() }.Where(v => !string.IsNullOrWhiteSpace(v)))));
+            }
+            result[teamId] = entries;
+        }
+        return result;
+    }
     public async Task<List<Team>> FetchTeamsAsync(string sport, string league, CancellationToken ct = default)
     {
         try
@@ -157,7 +187,7 @@ public sealed class EspnDetail(HttpClient http)
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
             return ParseTeams(doc.RootElement);
         }
-        catch { return []; }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { return []; }
     }
 
     internal static List<Team> ParseTeams(JsonElement root)
@@ -197,13 +227,18 @@ public sealed class EspnDetail(HttpClient http)
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
             return ParseStandings(doc.RootElement);
         }
-        catch { return []; }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { return []; }
     }
 
     internal static List<StandingRow> ParseStandings(JsonElement root)
     {
         var out_ = new List<StandingRow>();
-        foreach (var child in root.GetPropertyOrNull("children")?.EnumerateArray() ?? [])
+        IEnumerable<JsonElement> Nodes(JsonElement node)
+        {
+            yield return node;
+            foreach (var child in node.GetPropertyOrNull("children")?.EnumerateArray() ?? []) foreach (var item in Nodes(child)) yield return item;
+        }
+        foreach (var child in Nodes(root))
         {
             var groups = child.ValueKind == JsonValueKind.Object && child.TryGetProperty("standings", out var s)
                 ? new[] { s } : [child];
@@ -212,9 +247,11 @@ public sealed class EspnDetail(HttpClient http)
                 foreach (var e in g.GetPropertyOrNull("entries")?.EnumerateArray() ?? [])
                 {
                     var team = e.GetPropertyOrNull("team");
-                    int? Stat(string name) => e.GetPropertyOrNull("stats")?.EnumerateArray()
-                        .FirstOrDefault(x => x.GetPropertyOrNull("name")?.GetString() == name)
-                        .GetPropertyOrNull("value")?.TryGetInt32(out var v) == true ? v : null;
+                    int? Stat(string name)
+                    {
+                        var value = e.GetPropertyOrNull("stats")?.EnumerateArray().FirstOrDefault(x => x.GetPropertyOrNull("name")?.GetString() == name).GetPropertyOrNull("value");
+                        return double.TryParse(value?.StringValue(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number) && number >= 0 && number <= int.MaxValue ? (int)number : null;
+                    }
                     string? StrStat(string name) => e.GetPropertyOrNull("stats")?.EnumerateArray()
                         .FirstOrDefault(x => x.GetPropertyOrNull("name")?.GetString() == name)
                         .GetPropertyOrNull("displayValue")?.GetString();
@@ -222,7 +259,7 @@ public sealed class EspnDetail(HttpClient http)
                         team?.GetPropertyOrNull("id")?.GetString() ?? "",
                         team?.GetPropertyOrNull("displayName")?.GetString() ?? "?",
                         team?.GetPropertyOrNull("abbreviation")?.GetString() ?? "?",
-                        team?.GetPropertyOrNull("logo")?.GetString(),
+                        team?.GetPropertyOrNull("logo")?.GetString() ?? team?.GetPropertyOrNull("logos")?.EnumerateArray().FirstOrDefault().GetPropertyOrNull("href")?.GetString(),
                         Stat("wins") ?? 0, Stat("losses") ?? 0, Stat("ties"),
                         StrStat("winPercent") ?? StrStat("pct"), StrStat("gamesBehind") ?? StrStat("gb")));
                 }
@@ -241,20 +278,46 @@ public sealed class EspnDetail(HttpClient http)
             using var res = await http.SendAsync(req, ct).ConfigureAwait(false);
             res.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
-            var out_ = new List<RosterPlayer>();
-            foreach (var a in doc.RootElement.GetPropertyOrNull("athletes")?.EnumerateArray() ?? [])
-            {
-                var name = a.GetPropertyOrNull("displayName")?.GetString();
-                if (string.IsNullOrWhiteSpace(name)) continue;
-                out_.Add(new RosterPlayer(a.GetPropertyOrNull("id")?.GetString() ?? name, name,
-                    a.GetPropertyOrNull("shortName")?.GetString(),
-                    a.GetPropertyOrNull("position")?.GetPropertyOrNull("abbreviation")?.GetString(),
-                    a.GetPropertyOrNull("jersey")?.GetString(),
-                    a.GetPropertyOrNull("headshot")?.GetPropertyOrNull("href")?.GetString()));
-            }
-            return out_;
+            return ParseRoster(doc.RootElement);
         }
-        catch { return []; }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { return []; }
+    }
+
+    internal static List<RosterPlayer> ParseRoster(JsonElement root)
+    {
+        var output = new List<RosterPlayer>();
+        void Visit(JsonElement item)
+        {
+            if (item.ValueKind == JsonValueKind.Array) { foreach (var child in item.EnumerateArray()) Visit(child); return; }
+            if (item.ValueKind != JsonValueKind.Object) return;
+            if (item.GetPropertyOrNull("displayName")?.StringValue() is string name && item.GetPropertyOrNull("id")?.StringValue() is string id)
+                output.Add(new(id, name, item.GetPropertyOrNull("shortName")?.StringValue(), item.GetPropertyOrNull("position")?.GetPropertyOrNull("abbreviation")?.StringValue(), item.GetPropertyOrNull("jersey")?.StringValue(), item.GetPropertyOrNull("headshot")?.GetPropertyOrNull("href")?.StringValue()));
+            foreach (var key in new[] { "athletes", "items", "athlete" }) if (item.GetPropertyOrNull(key) is JsonElement child) Visit(child);
+        }
+        Visit(root); return output.DistinctBy(p => p.Id).ToList();
+    }
+    internal static List<GameLineup> ParseLineups(JsonElement root)
+    {
+        var output = new List<GameLineup>();
+        foreach (var group in root.GetPropertyOrNull("rosters")?.EnumerateArray() ?? [])
+        {
+            var team = group.GetPropertyOrNull("team"); var players = new List<LineupPlayer>();
+            foreach (var row in group.GetPropertyOrNull("roster")?.EnumerateArray() ?? [])
+            {
+                var athlete = row.GetPropertyOrNull("athlete"); if (athlete is null) continue;
+                var parsed = ParseRoster(row); if (parsed.Count == 0) continue;
+                var starter = row.GetPropertyOrNull("starter");
+                players.Add(new(parsed[0], starter?.ValueKind is JsonValueKind.True or JsonValueKind.False ? starter.Value.GetBoolean() : null));
+            }
+            if (players.Count > 0) output.Add(new(team?.GetPropertyOrNull("id")?.StringValue() ?? "", team?.GetPropertyOrNull("displayName")?.StringValue() ?? "Team", team?.GetPropertyOrNull("logo")?.StringValue(), players));
+        }
+        return output;
+    }
+    public async Task<List<SportEvent>> FetchTeamScheduleAsync(string sport, string league, string domainLeague, string teamId, CancellationToken ct = default)
+    {
+        using var response = await http.GetAsync($"{EspnClient.BaseUrl}sports/{sport}/{league}/teams/{Uri.EscapeDataString(teamId)}/schedule", ct);
+        response.EnsureSuccessStatusCode(); using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        return (doc.RootElement.GetPropertyOrNull("events")?.EnumerateArray() ?? []).Select(e => EspnClient.MapEvent(e, domainLeague, sport)).ToList();
     }
 
     public async Task<List<InjuryEntry>> FetchTeamInjuriesAsync(string sport, string league, string teamId, CancellationToken ct = default)
@@ -276,11 +339,11 @@ public sealed class EspnDetail(HttpClient http)
                 out_.Add(new InjuryEntry(name,
                     athlete?.GetPropertyOrNull("position")?.GetPropertyOrNull("abbreviation")?.GetString(),
                     i.GetPropertyOrNull("status")?.GetString(),
-                    i.GetPropertyOrNull("details")?.GetString() ?? i.GetPropertyOrNull("shortComment")?.GetString()));
+                    i.GetPropertyOrNull("details")?.StringValue() ?? i.GetPropertyOrNull("shortComment")?.StringValue() ?? i.GetPropertyOrNull("details")?.GetPropertyOrNull("detail")?.StringValue()));
             }
             return out_;
         }
-        catch { return []; }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { return []; }
     }
 }
 

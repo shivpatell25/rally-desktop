@@ -35,4 +35,5 @@
     <ProjectReference Include="..\..\src\Rally.Core\Rally.Core.csproj" />
   </ItemGroup>
 
+<ItemGroup><None Update="Fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

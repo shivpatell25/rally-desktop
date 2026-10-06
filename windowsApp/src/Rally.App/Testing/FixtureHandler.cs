@@ -7,7 +7,7 @@ namespace Rally.App.Testing;
 internal sealed class FixtureHandler : HttpMessageHandler
 {
     public static bool NoLive;
-    public const string VideoUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+    public static readonly string VideoUrl = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--qa-stream="))?["--qa-stream=".Length..] ?? "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
     private readonly HttpClient _real = new() { Timeout = TimeSpan.FromSeconds(18) };
     private static object Team(string id, string name, string abbreviation, string color, string sport = "nfl") => new { id, displayName = name, abbreviation, color, logo = $"https://a.espncdn.com/i/teamlogos/{sport}/500/{(sport == "ncaa" ? id : abbreviation.ToLowerInvariant())}.png" };
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -16,7 +16,7 @@ internal sealed class FixtureHandler : HttpMessageHandler
         object result;
         if (request.RequestUri.Host == "fixture.rally.test")
         {
-            if (path.EndsWith("manifest.json")) result = new { name = "Rally QA", catalogs = new[] { new { id = "sports", type = "tv" } } };
+            if (path.EndsWith("manifest.json")) result = new { id = "rally.qa", version = "1.0.0", name = "Rally QA", resources = new[] { "catalog", "stream" }, types = new[] { "tv" }, catalogs = new[] { new { id = "sports", type = "tv" } } };
             else if (path.Contains("/catalog/")) result = new { metas = new[] {
                 new { id = "chiefs-ravens", name = "Kansas City Chiefs vs Baltimore Ravens", type = "tv" },
                 new { id = "lakers-celtics", name = "Lakers vs Celtics", type = "tv" },
@@ -54,7 +54,12 @@ internal sealed class FixtureHandler : HttpMessageHandler
         }
         else if (path.Contains("/teams")) result = new { sports = new[] { new { leagues = new[] { new { teams = new[] { new { team = Team("12", "Chiefs", "KC", "E31837") }, new { team = Team("33", "Ravens", "BAL", "241773") } } } } } } };
         else if (path.Contains("/standings")) result = new { children = Array.Empty<object>() };
-        else return await _real.SendAsync(request, cancellationToken);
+        else
+        {
+            using var forwarded = new HttpRequestMessage(request.Method, request.RequestUri);
+            foreach (var header in request.Headers) forwarded.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            return await _real.SendAsync(forwarded, cancellationToken);
+        }
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(result), System.Text.Encoding.UTF8, "application/json") };
     }
 }
