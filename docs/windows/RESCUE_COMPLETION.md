@@ -135,3 +135,9 @@ The repair remains in progress. The live-clock health change and regression test
 - Windows Core regression suite: 67 passed, zero failed. The current UTM guest command channel timed out while checking the native UI, so this follow-up has not yet been interactively rechecked in Windows.
 - GitHub Actions run [37524139997](https://github.com/shivpatell25/rally-desktop/actions/runs/37524139997) passed for ARM64 and x64: 67 tests on each runner, native WinUI Release build, portable packaging, and artifact upload. Downloaded package archives passed ZIP CRC and SHA-256 checks; each includes all 17 WinUI XBF resources and Rally.App.pri, excludes DEBUG QA fixtures, and carries the architecture-matched VLC runtime.
 - This stabilization change is on `codex/windows-rescue`; the published 0.8.1 assets remain the prior release and do not contain this follow-up. The broader rescue audit remains open.
+
+### Foreground idle behavior follow-up
+
+- The signed-in Windows VM is open with Rally visible. Source inspection identified that the window's `Deactivated` event invoked the score saver immediately, bypassing its five-minute idle threshold. The score saver is now restricted to the active window and its idle timer; activating Rally wakes it. Repeated timer ticks also no longer refetch/rebuild a visible scoreboard or start overlapping scoreboard requests.
+- Core suite: 67 passed, zero failed. GitHub Actions run [37526376256](https://github.com/shivpatell25/rally-desktop/actions/runs/37526376256) passed on ARM64 and x64, including native WinUI Release builds, packaging, and artifact upload.
+- Windows interactive recheck is still pending: the desktop is signed in, but UTM guest input and its RPC command channel are not responding (`OSStatus -2700`, timeout). This is a guest-control limitation, not a sign-in requirement. The 0.8.1 release remains unchanged until the broader rescue and native rechecks are complete.
