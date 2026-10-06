@@ -11,10 +11,10 @@ public sealed record PlaybackTimeline(bool IsLive, bool CanSeek, long Position, 
 {
     public bool AtLiveEdge => IsLive && CanSeek && Duration - Position <= 5_000;
     public long LiveTarget => Math.Max(0, Duration - 1_500);
-    public static PlaybackTimeline Create(bool live, bool seekable, long position, long duration) =>
-        // Some rolling streams report an initial window length while time keeps
-        // advancing. That no longer describes a safe seek range.
-        new(live, seekable && duration > 0 && (!live || position <= duration), Math.Clamp(position, 0, Math.Max(0, duration)), Math.Max(0, duration));
+    public static PlaybackTimeline Create(bool live, bool seekable, long position, long duration, bool liveClockFresh = true) =>
+        // Live seeks require both a current decoder clock and a position inside
+        // the published window; stale live clocks cannot safely identify a seek range.
+        new(live, seekable && duration > 0 && (!live || liveClockFresh && position <= duration), Math.Clamp(position, 0, Math.Max(0, duration)), Math.Max(0, duration));
     public long ClampSeek(long position) => Math.Clamp(position, 0, IsLive ? LiveTarget : Duration);
 }
 

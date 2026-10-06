@@ -24,6 +24,7 @@ public sealed class PlaybackSession : IAsyncDisposable
     private bool _disposed, _wantsPlayback = true, _suspended, _retryPending;
     private long _suspendedPosition, _lastFrames;
     private DateTimeOffset? _healthySince;
+    private DateTimeOffset _lastClockAdvance = DateTimeOffset.UtcNow;
     private Task? _disposeTask;
     private int _generation, _openGeneration;
     private bool? _manifestLive;
@@ -33,7 +34,10 @@ public sealed class PlaybackSession : IAsyncDisposable
     public IReadOnlyList<PlaybackQuality> Qualities { get; private set; } = [];
     public string QualityLabel => _qualityHeight > 0 ? $"{_qualityHeight}p" : "Auto";
     public bool IsLive => _manifestLive ?? (Current?.Channel is not null || Event?.Status is EventStatus.Live or EventStatus.Halftime);
-    public PlaybackTimeline Timeline => PlaybackTimeline.Create(IsLive, !Loading && Player?.IsSeekable == true, Player?.Time ?? 0, Player?.Length ?? 0);
+    public PlaybackTimeline Timeline => PlaybackTimeline.Create(IsLive,
+        !Loading && Player?.IsSeekable == true,
+        Player?.Time ?? 0, Player?.Length ?? 0,
+        !IsLive || !_wantsPlayback || DateTimeOffset.UtcNow - _lastClockAdvance < TimeSpan.FromSeconds(5));
     public void SelectTrack(bool captions, int id, string name)
     {
         if (Loading || Player is null) return;
@@ -229,7 +233,7 @@ public sealed class PlaybackSession : IAsyncDisposable
             if (_qualityHeight > 0) { media.AddOption($":adaptive-maxheight={_qualityHeight}"); media.AddOption(":adaptive-logic=highest"); }
             media.AddOption($":network-caching={(_data.Settings.LowLatencyMode ? 650 : 1600)}"); media.AddOption(":http-reconnect");
             if (_data.Settings.AudioNormalizationEnabled) media.AddOption(":audio-filter=normvol");
-            _wantsPlayback = true; _suspended = false; _healthySince = null; _lastFrames = 0;
+            _wantsPlayback = true; _suspended = false; _healthySince = null; _lastFrames = 0; _lastClockAdvance = DateTimeOffset.UtcNow;
             _switching = false; Notify(); if (!player.Play(media)) { Loading = false; Status = "The stream could not start. Try another source."; Notify(); } _lastTime = 0; if (!recovery) _recoveries = 0;
         }
         catch (OperationCanceledException) { if (generation == _generation) { _switching = false; Loading = false; Status = "Playback canceled"; Notify(); } }
@@ -265,9 +269,15 @@ public sealed class PlaybackSession : IAsyncDisposable
         if (player.State == VLCState.Ended && !IsLive) return;
         var currentTime = player.Time; long frames = 0; var hasVideo = false;
         try { using var media = player.Media; hasVideo = media?.Tracks.Any(t => t.TrackType == TrackType.Video) == true; if (media?.Statistics is MediaStats stats) frames = stats.DisplayedPictures; } catch { }
-        if (currentTime != _lastTime && (!hasVideo || frames != _lastFrames))
+        var clockAdvanced = currentTime != _lastTime;
+        if (clockAdvanced) _lastClockAdvance = now;
+        // A discontinuity can freeze VLC's clock while decoded video keeps
+        // advancing. Frames establish video health; its clock governs seeking.
+        var advancing = hasVideo && frames > 0 ? frames != _lastFrames : clockAdvanced;
+        _lastTime = currentTime; _lastFrames = frames;
+        if (advancing)
         {
-            _lastTime = currentTime; _lastFrames = frames; _lastAdvance = now;
+            _lastAdvance = now;
             _healthySince ??= now; if (now - _healthySince > TimeSpan.FromSeconds(30)) _recoveries = 0;
         }
         else { _healthySince = null; if (player.State is VLCState.Error or VLCState.Ended || now - _lastAdvance > TimeSpan.FromSeconds(25)) Recover(); }

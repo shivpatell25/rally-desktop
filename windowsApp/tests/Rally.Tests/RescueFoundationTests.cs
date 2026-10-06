@@ -63,6 +63,13 @@ public sealed class RescueFoundationTests
         Assert.Equal(90_000, PlaybackTimeline.Create(false, true, 30_000, 90_000).ClampSeek(100_000));
     }
     [Fact]
+    public void LiveSeekIsDisabledWhenDecoderClockStopsAdvancing()
+    {
+        var stale = PlaybackTimeline.Create(true, true, 18_000, 80_000, liveClockFresh: false);
+        Assert.False(stale.CanSeek);
+        Assert.False(stale.AtLiveEdge);
+    }
+    [Fact]
     public async Task ScheduleDistinguishesEmptyDayFromTotalFeedFailure()
     {
         var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
