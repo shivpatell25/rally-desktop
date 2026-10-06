@@ -119,12 +119,12 @@ After the user signed in, native interactive validation resumed. Final Release A
 - Latest host core suite: 67 passed, zero failed. A fresh Windows native Release build succeeds for ARM64 and x64. Both payloads contain the app and resources, exclude DEBUG fixtures, and include the correct architecture of VLC. A macOS cross-build cannot run Microsoft's Windows XAML compiler.
 - The Windows VM restarted to its sign-in screen during the playback check. Native Release launch, live timeline recheck, track/source tests, scale restoration and final interaction checks need an unlocked desktop. No PIN was entered. Windows scaling and UTM automatic display resizing still need to be restored to the prior 125%/enabled values after that pass.
 
-The repair remains in progress. The live-clock health change and regression test are committed on `codex/windows-rescue`. The Windows rescue builds are validation payloads only until the 0.8.1 desktop release is published.
+The repair remains in progress. The live-clock health change and regression test are committed on `codex/windows-rescue`. The 0.8.1 desktop release is published with the rebuilt Windows ARM64/x64 packages and the macOS development DMG; the remaining audit items below are still open.
 
 ### Signed-in Release verification (October 6)
 
 - The signed-in Windows session launched the latest ARM64 Release payload. Home loaded current Rally sports data; Search returned the real Chiefs–Raiders final (30–27), and opening the result reached the matching event detail page.
 - A public highlight opened the player and surfaced Retry / Pick Source after its URL had expired. This verifies the recoverable playback error path, not successful decoding of that clip. Public DASH VOD and rolling HLS decoding were validated separately above.
-- The Windows native Release builds for ARM64 and x64 were rebuilt after the live-clock repair and inspected for XAML resources, architecture-matched VLC and absence of DEBUG fixtures. Version 0.8.1 packages are being prepared for publication.
+- The Windows native Release builds for ARM64 and x64 were rebuilt after the live-clock repair and inspected for XAML resources, architecture-matched VLC and absence of DEBUG fixtures. Both packages are published in [Rally Desktop 0.8.1](https://github.com/shivpatell25/rally-desktop/releases/tag/v0.8.1).
 - macOS regression suite: 98 passed. The 0.8.1 development DMG was built from the current source; it is ad-hoc signed and not notarized.
 - Native Windows Display Settings has been restored to the prior 125% scaling after the 150% Release UI pass. UTM automatic display resizing remains disabled pending a final VM cleanup.
