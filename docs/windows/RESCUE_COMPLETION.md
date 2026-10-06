@@ -128,3 +128,9 @@ The repair remains in progress. The live-clock health change and regression test
 - The Windows native Release builds for ARM64 and x64 were rebuilt after the live-clock repair and inspected for XAML resources, architecture-matched VLC and absence of DEBUG fixtures. Both packages are published in [Rally Desktop 0.8.1](https://github.com/shivpatell25/rally-desktop/releases/tag/v0.8.1).
 - macOS regression suite: 98 passed. The 0.8.1 development DMG was built from the current source; it is ad-hoc signed and not notarized.
 - Native Windows Display Settings has been restored to the prior 125% scaling after the 150% Release UI pass. UTM automatic display resizing remains disabled pending a final VM cleanup.
+
+### Post-release stabilization continuation
+
+- The native Windows screen was still signed in and displaying Rally. A route transition exposed a timing risk in the ambient score overlay: its sports-feed request could finish after navigation, and the overlay was not rechecking whether the current screen still allowed it. Navigation now invalidates any pending idle request, and the route eligibility is checked again after the request completes. The DEBUG QA snapshot now reports whether the idle overlay is visible.
+- Windows Core regression suite: 67 passed, zero failed. The current UTM guest command channel timed out while checking the native UI, so this follow-up has not yet been rebuilt or interactively rechecked in Windows. GitHub Actions is the next native build gate.
+- This stabilization change is on `codex/windows-rescue`; the published 0.8.1 assets remain the prior release and do not contain this follow-up. The broader rescue audit remains open.

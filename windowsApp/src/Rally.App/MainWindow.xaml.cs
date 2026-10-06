@@ -128,6 +128,7 @@ public sealed partial class MainWindow : Window
     }
     internal async Task IdleForQa() { var previous = App.Data.Settings.ScoreSaverEnabled; App.Data.Settings.ScoreSaverEnabled = true; await ShowIdle(); App.Data.Settings.ScoreSaverEnabled = previous; }
     internal void WakeForQa() => Wake();
+    internal bool IdleVisibleForQa => IdleVeil.Visibility == Visibility.Visible;
 #endif
     private int _idleGeneration;
     private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(10) };
@@ -175,6 +176,9 @@ public sealed partial class MainWindow : Window
         _idleTimer.Start();
         ContentFrame.Navigating += (_, args) =>
         {
+            // Route changes also dismiss the ambient overlay. This invalidates
+            // an in-flight score request before it can cover the destination.
+            Wake();
             _restoreGeneration++;
             if (ContentFrame.Content is Page previous)
             {
@@ -209,10 +213,13 @@ public sealed partial class MainWindow : Window
     }
     private async Task ShowIdle()
     {
-        if (!App.Data.Settings.ScoreSaverEnabled || App.Playback.IsPlaying || ContentFrame.Content is PlayerPage or GameViewPage or MultiViewPage or OnboardingPage) return;
+        if (!CanShowIdle()) return;
         try
         {
-            var generation = ++_idleGeneration; var games = await App.Data.GamesAsync(); if (generation != _idleGeneration || App.Playback.IsPlaying) return;
+            var generation = ++_idleGeneration; var games = await App.Data.GamesAsync();
+            // GamesAsync can outlive navigation into playback or onboarding.
+            // Recheck after the await so an old Home request cannot veil it.
+            if (generation != _idleGeneration || !CanShowIdle()) return;
             var clock = RallyUi.Text(DateTimeOffset.Now.LocalDateTime.ToString("h:mm tt"), 64); clock.HorizontalAlignment = HorizontalAlignment.Center;
             var scores = RallyUi.Columns(4, 16); var selected = games.OrderByDescending(g => g.Status is Rally.Core.EventStatus.Live or Rally.Core.EventStatus.Halftime).Take(4).ToList();
             for (var i = 0; i < selected.Count; i++) { var game = selected[i]; RallyUi.Put(scores, RallyUi.Panel(RallyUi.Column(RallyUi.Text(game.League, 11, true), RallyUi.Text(RallyUi.Matchup(game), 13, false, true), RallyUi.Text(RallyUi.Score(game), 20))), i); }
@@ -221,6 +228,8 @@ public sealed partial class MainWindow : Window
         }
         catch { }
     }
+    private bool CanShowIdle() => App.Data.Settings.ScoreSaverEnabled && !App.Playback.IsPlaying
+        && ContentFrame.Content is not (PlayerPage or GameViewPage or MultiViewPage or OnboardingPage);
     private void Wake() { _idleGeneration++; _lastInput = DateTimeOffset.UtcNow; IdleVeil.Visibility = Visibility.Collapsed; }
     private void Logo_Click(object sender, RoutedEventArgs e) => NavigateTo("home");
     private void KeyDown(object sender, KeyRoutedEventArgs e)
