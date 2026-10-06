@@ -56,7 +56,7 @@ The foundation and feature changes are implemented. Final runtime validation is 
 
 | Check | Result / scope |
 | --- | --- |
-| Core regression suite | 66 tests passed on .NET 8, including 14 rescue regressions; real NFL summary response fixture included |
+| Core regression suite | 66 tests passed on both macOS and Windows ARM64 on .NET 8, including 14 rescue regressions; real NFL summary response fixture included |
 | Native Windows build | Latest Debug ARM64 build succeeds, including save-failure tracking, quality-switch ordering, compact playback controls, and responsive moments |
 | Native launches | Repeated launches succeed in Windows 11 ARM64 VM |
 | Home/event/game navigation | Keyboard Watch opens game; event cards open detail; Back and Home shortcuts operate |
@@ -76,4 +76,6 @@ Remaining runtime checks: real-data app screens, all settings categories, save/r
 
 Windows scaling changed through the native Display settings from 125% to 100%. Home renders at 100%, including navigation, hero and event rails. Other screens at 100% and remaining scale levels still need checks. VM display connection stalled during further checks; the guest and read-only app diagnostics remained responsive. The display recovered after a VM restart. Windows is at its PIN sign-in screen; the user has been asked to unlock it for remaining interactive checks. An isolated DEBUG real-data profile is now available for validating production APIs without altering the normal Rally profile.
 
-Both self-contained Release payloads publish successfully on Windows: win-arm64 and win-x64. The executable and Rally.App.pri are present in each payload. Latest core test rerun: 66 passed, zero failed. Release launch and remaining manual checks are still pending. A later playback ordering fix covers resume and final recovery, and requires a new native build before runtime validation.
+Both self-contained Release payloads publish successfully on Windows: win-arm64 and win-x64. The executable and Rally.App.pri are present in each payload. Latest core test rerun: 66 passed, zero failed. Release launch and remaining manual checks are still pending. The later playback ordering fix covers resume and final recovery. It is included in successful fresh Debug ARM64 and Release ARM64/x64 builds; interactive runtime validation remains pending.
+
+Release payload inspection confirms DEBUG test fixtures are excluded and each package contains libvlc.dll for its own architecture. The temporary QA auto-start task was removed. Current rescue checkpoint is on `codex/windows-rescue`; no rescue release has been published. The VM still needs unlocking, and its display scaling is currently 100% (restore 125% after completing scale checks).
